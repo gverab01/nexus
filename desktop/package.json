@@ -1,0 +1,14 @@
+{
+  "name": "nexusreach-desktop",
+  "version": "1.0.0",
+  "description": "NexusReach Pro - Suite de Prospección B2B",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron main.cjs",
+    "dev": "electron main.cjs --dev"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "^33.2.1"
+  }
+}

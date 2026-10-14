@@ -1,0 +1,1004 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>Dripify Local | Automatización y Gestión de Leads</title>
+    <!-- Modern Typography: Inter & JetBrains Mono -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css?v=2.5">
+</head>
+<body>
+    <!-- Top Navigation Bar -->
+    <header class="navbar" id="main-header">
+        <div class="nav-container">
+            <div class="brand">
+                <div class="logo-icon">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-2-2 2 2 0 0 0-2 2v7h-4v-7a6 6 0 0 1 6-6z"></path>
+                        <rect x="2" y="9" width="4" height="12"></rect>
+                        <circle cx="4" cy="4" r="2"></circle>
+                    </svg>
+                </div>
+                <div class="brand-text">
+                    <h1>Dripify <span class="badge-env">Local</span></h1>
+                    <span class="subtext">Suite de Prospección B2B Multicanal</span>
+                </div>
+            </div>
+
+            <!-- Main View Switcher (Prospectos vs Listas vs Secuencias) -->
+            <nav class="nav-views-switcher">
+                <button class="nav-view-btn active" id="tab-nav-prospectos" onclick="switchMainView('prospectos')">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                        <circle cx="9" cy="7" r="4"></circle>
+                        <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                        <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                    </svg>
+                    <span>Prospectos</span>
+                </button>
+                <button class="nav-view-btn" id="tab-nav-listas" onclick="switchMainView('listas')">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"></path>
+                    </svg>
+                    <span>Listas de Leads</span>
+                    <span class="nav-badge-pill" id="badge-listas-count">1</span>
+                </button>
+                <button class="nav-view-btn" id="tab-nav-secuencias" onclick="switchMainView('secuencias')">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                    </svg>
+                    <span>Secuencias</span>
+                    <span class="nav-badge-pill" id="badge-secuencias-count">1</span>
+                </button>
+            </nav>
+
+            <div class="nav-status-group">
+                <div class="status-pill connected" id="browseros-status" onclick="verificarEstadoBrowserOS()" title="Clic para verificar conexión con BrowserOS">
+                    <span class="pulse-dot"></span>
+                    <span id="browseros-status-text">BrowserOS Activo</span>
+                </div>
+
+                <button class="btn-browser-launch connected" id="btn-iniciar-browser" onclick="iniciarBrowserOS()" title="Iniciar BrowserOS con sesiones de LinkedIn y Zoho CRM">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                    </svg>
+                    <span id="btn-iniciar-browser-text">Abrir LinkedIn & Zoho</span>
+                </button>
+
+                <div class="campaign-toggle-container">
+                    <button class="campaign-btn paused" id="campaign-toggle-btn" onclick="toggleCampaign()">
+                        <span class="btn-icon" id="campaign-icon">⏸</span>
+                        <span id="campaign-status-text">PAUSADA</span>
+                    </button>
+                </div>
+
+                <a href="/docs" target="_blank" class="nav-btn-docs" title="Ver Documentación Swagger API">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <polyline points="14 2 14 8 20 8"></polyline>
+                        <line x1="16" y1="13" x2="8" y2="13"></line>
+                        <line x1="16" y1="17" x2="8" y2="17"></line>
+                        <polyline points="10 9 9 9 8 9"></polyline>
+                    </svg>
+                    <span>API Docs</span>
+                </a>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content Container -->
+    <main class="dashboard-layout" id="dashboard-main">
+        <!-- Safety & Rate Limit Alert Banner (Persistent) -->
+        <section class="safety-banner" id="safety-banner">
+            <div class="safety-content">
+                <div class="safety-icon-box">
+                    <span id="safety-icon" class="safety-icon">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                        </svg>
+                    </span>
+                </div>
+                <div class="safety-text" id="safety-text">
+                    <strong>Modo Ultra-Seguro:</strong> Límite conservador fijado en <strong>5 invitaciones diarias</strong> y <strong>15 emails Google Workspace</strong> con pausas gaussianas (3 a 6 min) y restricción a horario laboral comercial en días hábiles.
+                </div>
+            </div>
+            <div class="safety-pills-group">
+                <div class="safety-meta-pill" id="schedule-pill">
+                    <span class="status-indicator-dot online"></span>
+                    <span id="schedule-status-text">En Horario Laboral</span>
+                </div>
+                <div class="safety-meta-pill" id="daily-quota-pill">
+                    <span class="meta-label">Cupo LinkedIn:</span>
+                    <strong id="quota-remaining" class="mono-val">5 / 5</strong>
+                </div>
+            </div>
+        </section>
+
+        <!-- ===================================================================
+             VISTA 1: PROSPECTOS & EXTRACCIÓN DIRECTA
+             =================================================================== -->
+        <div id="view-prospectos" class="main-view active">
+            <!-- KPI Metric Cards Grid -->
+            <section class="kpi-grid" id="kpi-section">
+                <!-- Card 1: Invitaciones Hoy -->
+                <div class="kpi-card" id="card-invitaciones-hoy">
+                    <div class="kpi-header">
+                        <span class="kpi-title">Invitaciones Hoy</span>
+                        <div class="kpi-icon-box">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <polyline points="12 6 12 12 16 14"></polyline>
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="kpi-body">
+                        <div class="kpi-number" id="metric-hoy">0 <span class="kpi-denom">/ 5</span></div>
+                        <div class="progress-bar-container">
+                            <div class="progress-bar-fill" id="metric-progress-bar" style="width: 0%;"></div>
+                        </div>
+                        <div class="kpi-footer-note" id="metric-cupo-text">5 disponibles hoy</div>
+                    </div>
+                </div>
+
+                <!-- Card 2: En Cola (Pendientes) -->
+                <div class="kpi-card" id="card-en-cola">
+                    <div class="kpi-header">
+                        <span class="kpi-title">En Cola (Pendientes)</span>
+                        <div class="kpi-icon-box">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                                <circle cx="9" cy="7" r="4"></circle>
+                                <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                                <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="kpi-body">
+                        <div class="kpi-number" id="metric-cola">0</div>
+                        <div class="kpi-badge-info">Directivos calificados</div>
+                        <div class="kpi-footer-note">Listos para el siguiente lote</div>
+                    </div>
+                </div>
+
+                <!-- Card 3: Invitaciones Enviadas -->
+                <div class="kpi-card" id="card-enviadas">
+                    <div class="kpi-header">
+                        <span class="kpi-title">Invitaciones Enviadas</span>
+                        <div class="kpi-icon-box">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                                <line x1="22" y1="2" x2="11" y2="13"></line>
+                                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="kpi-body">
+                        <div class="kpi-number" id="metric-enviadas">0</div>
+                        <div class="kpi-badge-info">Esperando respuesta</div>
+                        <div class="kpi-footer-note">Verificados como 'Pendiente'</div>
+                    </div>
+                </div>
+
+                <!-- Card 4: Conectados / Aceptados -->
+                <div class="kpi-card" id="card-conectados">
+                    <div class="kpi-header">
+                        <span class="kpi-title">Conectados / Aceptados</span>
+                        <div class="kpi-icon-box">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                                <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="kpi-body">
+                        <div class="kpi-number" id="metric-conectados">0</div>
+                        <div class="kpi-badge-info" id="metric-tasa-badge">Tasa: 0%</div>
+                        <div class="kpi-footer-note">Listos para secuencia de mensaje</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- LinkedIn Automated Search & Extraction Panel -->
+            <section class="extractor-card" id="extractor-card">
+                <div class="extractor-header">
+                    <div class="extractor-title-group">
+                        <div class="extractor-icon">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="11" cy="11" r="8"></circle>
+                                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                            </svg>
+                        </div>
+                        <div>
+                            <h3>Búsqueda & Extracción Directa (LinkedIn)</h3>
+                            <p>Navega y extrae batches de 10 leads directamente a través de tu sesión activa de BrowserOS</p>
+                        </div>
+                    </div>
+                    <div class="extractor-presets">
+                        <span class="preset-label">Filtros frecuentes:</span>
+                        <button class="preset-btn" onclick="aplicarPresetBusqueda('Director de Colegio Chile')">Directores</button>
+                        <button class="preset-btn" onclick="aplicarPresetBusqueda('Sostenedor Colegio Chile')">Sostenedores</button>
+                        <button class="preset-btn" onclick="aplicarPresetBusqueda('Coordinador PIE Chile')">Encargados PIE</button>
+                        <button class="preset-btn" onclick="aplicarPresetBusqueda('Convivencia Escolar Chile')">Convivencia</button>
+                    </div>
+                </div>
+                <div class="extractor-form">
+                    <div class="extractor-input-box">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="11" cy="11" r="8"></circle>
+                            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                        </svg>
+                        <input type="text" id="input-busqueda-linkedin" placeholder="Ej: Director de Colegio Chile, Rector, Jefe UTP..." value="Director de Colegio Chile">
+                    </div>
+                    <div class="extractor-page-box">
+                        <label for="select-pagina-linkedin">Página</label>
+                        <select id="select-pagina-linkedin">
+                            <option value="1">1</option>
+                            <option value="2">2</option>
+                            <option value="3">3</option>
+                            <option value="4">4</option>
+                            <option value="5">5</option>
+                            <option value="6">6</option>
+                            <option value="7">7</option>
+                            <option value="8">8</option>
+                        </select>
+                    </div>
+                    <div class="extractor-list-box">
+                        <label for="select-extractor-target-list">Lista Destino</label>
+                        <select id="select-extractor-target-list" title="Lista de prospectos que recibirá estos leads">
+                            <option value="">(Cargando listas...)</option>
+                        </select>
+                    </div>
+                    <button class="btn-ejecutar-extraccion" id="btn-ejecutar-extraccion" onclick="ejecutarExtraccionLinkedIn()">
+                        <span id="extractor-btn-icon">⚡</span>
+                        <span id="extractor-btn-text">Extraer 10 Leads</span>
+                    </button>
+                </div>
+            </section>
+
+            <!-- Leads Table & Control Panel -->
+            <section class="leads-section" id="leads-section">
+                <div class="table-toolbar">
+                    <div class="toolbar-left">
+                        <h2>Prospectos Directivos</h2>
+                        <span class="badge-counter" id="total-badge">0 registrados</span>
+                    </div>
+
+                    <div class="toolbar-right">
+                        <!-- Search Input -->
+                        <div class="search-box">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="11" cy="11" r="8"></circle>
+                                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                            </svg>
+                            <input type="text" id="search-input" placeholder="Buscar por director, colegio o cargo..." oninput="handleSearch()">
+                            <span class="search-kbd">/</span>
+                        </div>
+
+                        <!-- Filter Tabs -->
+                        <div class="filter-tabs">
+                            <button class="filter-tab active" data-filter="" onclick="setFilter(this, '')">Todos</button>
+                            <button class="filter-tab" data-filter="EXTRAIDO" onclick="setFilter(this, 'EXTRAIDO')">En Cola</button>
+                            <button class="filter-tab" data-filter="INVITACION_ENVIADA" onclick="setFilter(this, 'INVITACION_ENVIADA')">Invitados</button>
+                            <button class="filter-tab" data-filter="INVITACION_PENDIENTE" onclick="setFilter(this, 'INVITACION_PENDIENTE')">Previos</button>
+                            <button class="filter-tab" data-filter="CONECTADO" onclick="setFilter(this, 'CONECTADO')">Conectados</button>
+                        </div>
+
+                        <div class="toolbar-actions">
+                            <button class="btn-icon-subtle" onclick="cargarDatos()" title="Refrescar lista y métricas">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="23 4 23 10 17 10"></polyline>
+                                    <polyline points="1 20 1 14 7 14"></polyline>
+                                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                                </svg>
+                            </button>
+                            <button class="btn-reset-cols" onclick="resetColumnas()" title="Restablecer orden de columnas">
+                                Restablecer columnas
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Table Container -->
+                <div class="table-container">
+                    <table class="leads-table" id="leads-table">
+                        <thead id="leads-thead">
+                            <tr id="leads-header-row">
+                                <!-- Renderizado dinámico y arrastrable vía JavaScript -->
+                            </tr>
+                        </thead>
+                        <tbody id="leads-tbody">
+                            <tr>
+                                <td colspan="10" class="loading-cell">Cargando prospectos...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+
+        <!-- ===================================================================
+             VISTA 2: LISTAS DE LEADS (AUDIENCIAS Y SEGMENTACIÓN)
+             =================================================================== -->
+        <div id="view-listas" class="main-view" style="display: none;">
+            <!-- Lists Header & Filter Toolbar -->
+            <section class="lists-header-bar">
+                <div class="lists-title-group">
+                    <h2>Listas de Leads & Audiencias</h2>
+                    <p>Organiza prospectos por listas segmentadas y conéctalas a una o varias secuencias en paralelo con enrolamiento en tiempo real.</p>
+                </div>
+                <div class="lists-actions-group">
+                    <button class="btn-primary-action" onclick="abrirModalNuevaLista()">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="12" y1="5" x2="12" y2="19"></line>
+                            <line x1="5" y1="12" x2="19" y2="12"></line>
+                        </svg>
+                        <span>Nueva Lista de Leads</span>
+                    </button>
+                </div>
+            </section>
+
+            <!-- KPI Lists Cards -->
+            <section class="kpi-grid">
+                <div class="kpi-card">
+                    <div class="kpi-header">
+                        <span class="kpi-title">Total Listas</span>
+                        <div class="kpi-icon-box">📋</div>
+                    </div>
+                    <div class="kpi-body">
+                        <div class="kpi-number" id="metric-listas-total">0</div>
+                        <div class="kpi-footer-note">Audiencias configuradas</div>
+                    </div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-header">
+                        <span class="kpi-title">Listas Activas</span>
+                        <div class="kpi-icon-box">⚡</div>
+                    </div>
+                    <div class="kpi-body">
+                        <div class="kpi-number" id="metric-listas-activas">0</div>
+                        <div class="kpi-footer-note">En extracción o secuencia</div>
+                    </div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-header">
+                        <span class="kpi-title">Leads en Listas</span>
+                        <div class="kpi-icon-box">👥</div>
+                    </div>
+                    <div class="kpi-body">
+                        <div class="kpi-number" id="metric-listas-leads">0</div>
+                        <div class="kpi-footer-note">Directivos clasificados</div>
+                    </div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-header">
+                        <span class="kpi-title">Conexiones a Secuencias</span>
+                        <div class="kpi-icon-box">🔗</div>
+                    </div>
+                    <div class="kpi-body">
+                        <div class="kpi-number" id="metric-listas-vinculos">0</div>
+                        <div class="kpi-footer-note">Vínculos de auto-ingreso activos</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Lists Filter Tabs & Search -->
+            <div class="lists-toolbar-row">
+                <div class="filter-tabs" id="listas-filter-tabs">
+                    <button class="filter-tab active" data-filter="" onclick="filtrarListasUI(this, '')">Todas</button>
+                    <button class="filter-tab" data-filter="ACTIVA" onclick="filtrarListasUI(this, 'ACTIVA')">Activas</button>
+                    <button class="filter-tab" data-filter="EXTRAYENDO" onclick="filtrarListasUI(this, 'EXTRAYENDO')">En Extracción</button>
+                    <button class="filter-tab" data-filter="DETENIDA" onclick="filtrarListasUI(this, 'DETENIDA')">Detenidas / Fijas</button>
+                </div>
+                <div class="search-box">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8"></circle>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                    </svg>
+                    <input type="text" id="input-buscar-listas" placeholder="Buscar lista o término..." oninput="handleSearchListas()">
+                </div>
+            </div>
+
+            <!-- Lead Lists Cards Grid -->
+            <div class="lists-grid" id="listas-grid">
+                <div class="loading-cell">Cargando listas de prospectos...</div>
+            </div>
+        </div>
+
+        <!-- ===================================================================
+             VISTA 3: GESTOR DE SECUENCIAS MULTICANAL (ÁRBOLES DE DECISIÓN)
+             =================================================================== -->
+        <div id="view-secuencias" class="main-view" style="display: none;">
+            <!-- Sequence Sub-View Mode Switcher (Flujo vs Matriz Global) -->
+            <div class="sec-mode-switcher-bar">
+                <div class="sec-mode-pills">
+                    <button class="sec-mode-pill active" id="subtab-sec-flujo" onclick="switchSecuenciaSubView('flujo')">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                        </svg>
+                        <span>Árbol de Decisión & Flujo</span>
+                    </button>
+                    <button class="sec-mode-pill" id="subtab-sec-global" onclick="switchSecuenciaSubView('global')">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="3" width="7" height="7"></rect>
+                            <rect x="14" y="3" width="7" height="7"></rect>
+                            <rect x="14" y="14" width="7" height="7"></rect>
+                            <rect x="3" y="14" width="7" height="7"></rect>
+                        </svg>
+                        <span>Todas las Secuencias (Matriz Global)</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Sequence Header & Actions (Modo Flujo) -->
+            <section class="sequence-header-bar" id="sec-header-flujo">
+                <div class="sequence-select-group">
+                    <div class="sequence-title-wrapper">
+                        <span class="sub-label">Secuencia Seleccionada</span>
+                        <div class="select-inline-wrapper" style="display: flex; gap: 8px; align-items: center;">
+                            <select id="select-secuencia-activa" onchange="cambiarSecuenciaSeleccionada(this.value)">
+                                <option value="sec-default-directores-2026">Outreach Directores 2026 (LinkedIn + Workspace Multicanal)</option>
+                            </select>
+                            <button class="btn-secondary" onclick="abrirModalNuevaSecuencia()" title="Crear una nueva secuencia personalizada">
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                                <span>+ Nueva Secuencia</span>
+                            </button>
+                        </div>
+                    </div>
+                    <span class="badge-status-active" id="secuencia-status-pill">● PUBLICADA</span>
+                </div>
+
+                <div class="sequence-actions-group">
+                    <button class="btn-toggle-publish published" id="btn-toggle-publicar-secuencia" onclick="togglePublicacionSecuenciaActual()" title="Publicar o pausar esta secuencia">
+                        <span id="btn-toggle-publish-icon">⏸</span>
+                        <span id="btn-toggle-publish-text">Pausar Secuencia</span>
+                    </button>
+
+                    <button class="btn-secondary" onclick="asignarTodosLosLeadsASecuencia()" title="Inscribir los leads en cola a esta secuencia">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                            <circle cx="8.5" cy="7" r="4"></circle>
+                            <line x1="20" y1="8" x2="20" y2="14"></line>
+                            <line x1="23" y1="11" x2="17" y2="11"></line>
+                        </svg>
+                        <span>Asignar Leads en Cola</span>
+                    </button>
+
+                    <button class="btn-primary-action" id="btn-ejecutar-siguiente-paso" onclick="ejecutarSiguientePasoSecuencia()">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                        </svg>
+                        <span id="btn-ejecutar-paso-text">Ejecutar Siguiente Paso Ahora</span>
+                    </button>
+                </div>
+            </section>
+
+            <!-- Connected Audiences / Lead Lists for this Sequence -->
+            <section class="sec-audiences-bar" id="sec-audiences-bar">
+                <div class="sec-audiences-label">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                        <circle cx="9" cy="7" r="4"></circle>
+                        <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                    </svg>
+                    <span>Públicos y Listas Asignadas:</span>
+                </div>
+                <div class="sec-audiences-chips" id="sec-audiences-chips">
+                    <span class="audience-chip empty">Ninguna lista vinculada</span>
+                </div>
+                <button class="btn-add-audience" onclick="abrirModalConectarListaASecuenciaActual()" title="Vincular una lista de leads a esta secuencia">
+                    + Conectar Lista
+                </button>
+            </section>
+
+            <!-- Contenedor Sub-Vista 1: Flujo Individual y Leads -->
+            <div id="sec-subview-flujo-container">
+                <!-- Sequence Metrics Cards -->
+                <section class="kpi-grid">
+                    <div class="kpi-card">
+                        <div class="kpi-header">
+                            <span class="kpi-title">Pasos del Árbol</span>
+                            <div class="kpi-icon-box">🌳</div>
+                        </div>
+                        <div class="kpi-body">
+                            <div class="kpi-number" id="sec-total-pasos">11</div>
+                            <div class="kpi-footer-note">Acciones y bifurcaciones</div>
+                        </div>
+                    </div>
+
+                    <div class="kpi-card">
+                        <div class="kpi-header">
+                            <span class="kpi-title">Leads Asignados</span>
+                            <div class="kpi-icon-box">👥</div>
+                        </div>
+                        <div class="kpi-body">
+                            <div class="kpi-number" id="sec-leads-total">0</div>
+                            <div class="kpi-footer-note" id="sec-leads-en-curso">0 en curso</div>
+                        </div>
+                    </div>
+
+                    <div class="kpi-card">
+                        <div class="kpi-header">
+                            <span class="kpi-title">Próxima Acción Lista</span>
+                            <div class="kpi-icon-box">⏱️</div>
+                        </div>
+                        <div class="kpi-body">
+                            <div class="kpi-number" style="font-size: 1.25rem;" id="sec-proximo-lead-nombre">Ninguno en cola</div>
+                            <div class="kpi-footer-note" id="sec-proxima-hora">-</div>
+                        </div>
+                    </div>
+
+                    <div class="kpi-card">
+                        <div class="kpi-header">
+                            <span class="kpi-title">Completados</span>
+                            <div class="kpi-icon-box">✅</div>
+                        </div>
+                        <div class="kpi-body">
+                            <div class="kpi-number" id="sec-leads-completados">0</div>
+                            <div class="kpi-footer-note">Ciclo de secuencia finalizado</div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Pipeline Telemetry Ribbon (Embudo de Leads por Etapas) -->
+                <section class="sec-pipeline-ribbon" id="sec-pipeline-ribbon">
+                    <div class="pipeline-ribbon-header">
+                        <span class="pipeline-ribbon-title">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <polyline points="12 6 12 12 16 14"></polyline>
+                            </svg>
+                            Distribución de Prospectos por Etapa del Embudo
+                        </span>
+                        <span class="pipeline-ribbon-summary" id="pipeline-ribbon-summary">
+                            Cargando distribución...
+                        </span>
+                    </div>
+                    <div class="pipeline-stages-track" id="pipeline-stages-track">
+                        <!-- Nodos de etapa renderizados dinámicamente vía app.js -->
+                    </div>
+                </section>
+
+                <!-- Flowchart / Visual Decision Tree Canvas -->
+                <section class="flowchart-section">
+                    <div class="flowchart-header">
+                        <div>
+                            <h3>Árbol de Decisión Multicanal (Flujo de la Secuencia)</h3>
+                            <p>Haz clic en cualquier tarjeta de paso para editar sus mensajes, Spintax o tiempos de espera.</p>
+                        </div>
+                        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                            <button class="btn-secondary" onclick="abrirModalAgregarPaso('inicio')" title="Insertar un nuevo paso al comienzo de la secuencia">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                                <span>+ Paso al Inicio</span>
+                            </button>
+                            <button class="btn-secondary" onclick="abrirModalAgregarPaso('final')" title="Agregar un nuevo paso al final de la secuencia">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                                <span>+ Paso al Final</span>
+                            </button>
+                            <div class="flowchart-legend">
+                                <span class="legend-item"><span class="legend-bullet linkedin"></span> LinkedIn</span>
+                                <span class="legend-item"><span class="legend-bullet workspace"></span> Google Workspace</span>
+                                <span class="legend-item"><span class="legend-bullet delay"></span> Espera</span>
+                                <span class="legend-item"><span class="legend-bullet condition"></span> Bifurcación</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flowchart-canvas" id="flowchart-canvas">
+                        <!-- Renderizado dinámico del árbol vía app.js -->
+                        <div class="loading-cell">Cargando árbol de decisión...</div>
+                    </div>
+                </section>
+
+                <!-- Leads enrolled in this sequence -->
+                <section class="leads-section" style="margin-top: 20px;">
+                    <div class="table-toolbar">
+                        <div class="toolbar-left">
+                            <h2>Prospectos en esta Secuencia</h2>
+                            <span class="badge-counter" id="sec-table-badge">0 inscritos</span>
+                        </div>
+                        <div class="toolbar-right">
+                            <button class="btn-icon-subtle" onclick="cargarLeadsEnSecuencia()" title="Refrescar estado de prospectos en la secuencia">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="23 4 23 10 17 10"></polyline>
+                                    <polyline points="1 20 1 14 7 14"></polyline>
+                                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="table-container">
+                        <table class="leads-table">
+                            <thead>
+                                <tr>
+                                    <th>Director / Contacto</th>
+                                    <th>Institución</th>
+                                    <th>Email Workspace</th>
+                                    <th>Paso Actual</th>
+                                    <th>Próxima Ejecución</th>
+                                    <th>Estado</th>
+                                </tr>
+                            </thead>
+                            <tbody id="sec-leads-tbody">
+                                <tr>
+                                    <td colspan="6" class="loading-cell">No hay leads asignados a esta secuencia aún. Usa el botón "Asignar Leads en Cola".</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+
+            <!-- Contenedor Sub-Vista 2: Matriz Global de Secuencias -->
+            <div id="sec-subview-global-container" style="display: none;">
+                <section class="leads-section">
+                    <div class="table-toolbar">
+                        <div class="toolbar-left">
+                            <h2>Visión Global de Secuencias</h2>
+                            <span class="badge-counter" id="sec-global-badge">0 secuencias registradas</span>
+                        </div>
+                        <div class="toolbar-right">
+                            <div class="filter-tabs" id="sec-global-filter-tabs">
+                                <button class="filter-tab active" data-sec-filter="" onclick="filtrarMatrizSecuenciasUI(this, '')">Todas</button>
+                                <button class="filter-tab" data-sec-filter="PUBLICADA" onclick="filtrarMatrizSecuenciasUI(this, 'PUBLICADA')">Publicadas / Activas</button>
+                                <button class="filter-tab" data-sec-filter="PAUSADA" onclick="filtrarMatrizSecuenciasUI(this, 'PAUSADA')">Pausadas</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="table-container">
+                        <table class="leads-table" id="tabla-secuencias-global">
+                            <thead>
+                                <tr>
+                                    <th>Nombre de Secuencia</th>
+                                    <th>Estado de Publicación</th>
+                                    <th>Públicos / Listas Conectadas</th>
+                                    <th>Pasos</th>
+                                    <th>Leads en Curso</th>
+                                    <th>Completados</th>
+                                    <th>Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody id="sec-global-tbody">
+                                <tr>
+                                    <td colspan="7" class="loading-cell">Cargando secuencias...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+        </div>
+    </main>
+
+    <!-- Side Detail Modal / Drawer for Lead -->
+    <div class="modal-backdrop" id="lead-modal-backdrop" onclick="cerrarModal()">
+        <div class="modal-drawer" id="lead-modal" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <div class="modal-lead-profile">
+                    <div class="modal-avatar" id="modal-avatar">--</div>
+                    <div class="modal-title-group">
+                        <h3 id="modal-nombre">Cargando...</h3>
+                        <p id="modal-cargo">-</p>
+                    </div>
+                </div>
+                <button class="modal-close-btn" onclick="cerrarModal()" title="Cerrar">&times;</button>
+            </div>
+
+            <div class="modal-tabs">
+                <button class="modal-tab active" onclick="switchModalTab('resumen')">Resumen</button>
+                <button class="modal-tab" onclick="switchModalTab('historial')">Historial</button>
+                <button class="modal-tab" onclick="switchModalTab('mensajes')">LinkedIn</button>
+                <button class="modal-tab" onclick="switchModalTab('correos')">Emails</button>
+            </div>
+
+            <div class="modal-body">
+                <!-- Tab Resumen -->
+                <div class="tab-pane active" id="pane-resumen">
+                    <div class="detail-row">
+                        <span class="label">Colegio / Institución</span>
+                        <span class="value" id="modal-institucion">-</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">Correo Electrónico</span>
+                        <span class="value" id="modal-email"><span class="empty-val">No disponible</span></span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">Teléfono</span>
+                        <span class="value" id="modal-telefono"><span class="empty-val">No disponible</span></span>
+                    </div>
+                    <div class="contact-edit-box">
+                        <div class="contact-edit-header">
+                            <span>Datos de Contacto Directo</span>
+                        </div>
+                        <div class="contact-input-grid">
+                            <input type="email" id="input-edit-email" placeholder="ejemplo@colegio.cl">
+                            <input type="text" id="input-edit-telefono" placeholder="+56 9 8765 4321">
+                            <button class="btn-save-contact" onclick="guardarDatosContacto()">Guardar</button>
+                        </div>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">Ubicación</span>
+                        <span class="value" id="modal-ubicacion">-</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">Grado de Red</span>
+                        <span class="value mono-val" id="modal-grado">-</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">Perfil LinkedIn</span>
+                        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                            <button class="btn-browser-inline" id="btn-modal-open-browseros" onclick="abrirPerfilModalEnBrowserOS()">
+                                Abrir en BrowserOS
+                            </button>
+                            <a href="#" target="_blank" class="value link" id="modal-url">Pestaña normal ↗</a>
+                        </div>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">Siguiendo en LinkedIn</span>
+                        <span class="value" id="modal-siguiendo">No</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">Fecha Extracción</span>
+                        <span class="value mono-val" id="modal-fecha-extraccion">-</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">Fecha Visita</span>
+                        <span class="value mono-val" id="modal-fecha-visita">-</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">Fecha Invitación</span>
+                        <span class="value mono-val" id="modal-fecha-invitacion">-</span>
+                    </div>
+                    <div class="detail-tags-section">
+                        <span class="label">Etiquetas</span>
+                        <div class="tag-chips" id="modal-tags"></div>
+                    </div>
+                </div>
+
+                <!-- Tab Historial -->
+                <div class="tab-pane" id="pane-historial">
+                    <div class="timeline" id="modal-timeline">
+                        <!-- Eventos cronológicos -->
+                    </div>
+                </div>
+
+                <!-- Tab Mensajes -->
+                <div class="tab-pane" id="pane-mensajes">
+                    <div class="empty-state-tab" id="modal-mensajes-content">
+                        <p>No hay mensajes en secuencia todavía.</p>
+                        <small>Los mensajes se activan una vez que el contacto acepte la invitación.</small>
+                    </div>
+                </div>
+
+                <!-- Tab Correos -->
+                <div class="tab-pane" id="pane-correos">
+                    <div class="empty-state-tab" id="modal-correos-content">
+                        <p>No hay correos registrados para este contacto.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-footer" id="modal-footer-actions">
+                <!-- Botones contextuales dinámicos -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal para Editar Paso del Flujo -->
+    <div class="modal-backdrop" id="step-modal-backdrop" onclick="cerrarStepModal()">
+        <div class="step-editor-modal" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <div>
+                    <h3 id="step-modal-title">Editar Paso del Flujo</h3>
+                    <p id="step-modal-subtitle" style="font-size: 0.75rem; color: var(--text-muted);">-</p>
+                </div>
+                <button class="modal-close-btn" onclick="cerrarStepModal()">&times;</button>
+            </div>
+            <div class="modal-body" id="step-modal-body">
+                <!-- Formulario dinámico según tipo de paso -->
+            </div>
+            <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center;">
+                <button class="btn-danger-outline" onclick="confirmarEliminarPasoDesdeModal()" title="Eliminar este paso de la secuencia">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                    <span>Eliminar Paso</span>
+                </button>
+                <div style="display: flex; gap: 8px;">
+                    <button class="btn-secondary" onclick="cerrarStepModal()">Cancelar</button>
+                    <button class="btn-primary-action" onclick="guardarEdicionPaso()">Guardar Cambios</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal para Crear Nueva Secuencia -->
+    <div class="modal-backdrop" id="modal-nueva-secuencia-backdrop" onclick="cerrarModalNuevaSecuencia()">
+        <div class="step-editor-modal" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <div>
+                    <h3>Crear Nueva Secuencia</h3>
+                    <p style="font-size: 0.75rem; color: var(--text-muted);">Diseña una campaña automatizada de outreach multicanal</p>
+                </div>
+                <button class="modal-close-btn" onclick="cerrarModalNuevaSecuencia()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="step-form-group">
+                    <label for="input-nueva-sec-nombre">Nombre de la Secuencia *</label>
+                    <input type="text" id="input-nueva-sec-nombre" placeholder="Ej: Outreach Directores Subvencionados 2026" required>
+                </div>
+                <div class="step-form-group">
+                    <label for="input-nueva-sec-desc">Descripción u Objetivo</label>
+                    <textarea id="input-nueva-sec-desc" placeholder="Campaña dirigida a sostenedores y directores escolares..."></textarea>
+                </div>
+                <div class="step-form-group">
+                    <label for="select-nueva-sec-plantilla">Estructura Inicial (Plantilla)</label>
+                    <select id="select-nueva-sec-plantilla">
+                        <option value="multicanal">Árbol Completo Multicanal (LinkedIn + Workspace + Bifurcación) - Recomendado</option>
+                        <option value="linkedin_lineal">Secuencia Lineal LinkedIn (Visita ➔ Conectar ➔ Mensaje)</option>
+                        <option value="workspace_lineal">Secuencia Lineal Workspace (Email Inicial ➔ Espera ➔ Follow-up)</option>
+                        <option value="vacia">Secuencia Vacía (Empezar desde cero)</option>
+                    </select>
+                </div>
+                <div class="step-form-group">
+                    <label for="select-nueva-sec-estado">Estado Inicial</label>
+                    <select id="select-nueva-sec-estado">
+                        <option value="true">Publicada / Activa inmediatamente</option>
+                        <option value="false">Pausada (Borrador)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="cerrarModalNuevaSecuencia()">Cancelar</button>
+                <button class="btn-primary-action" onclick="guardarNuevaSecuencia()">Crear Secuencia</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal para Agregar Nuevo Paso (Inicio, Intermedio o Final) -->
+    <div class="modal-backdrop" id="modal-agregar-paso-backdrop" onclick="cerrarModalAgregarPaso()">
+        <div class="step-editor-modal" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <div>
+                    <h3 id="modal-agregar-paso-title">Insertar Nuevo Paso</h3>
+                    <p id="modal-agregar-paso-subtitle" style="font-size: 0.75rem; color: var(--text-muted);">Configura la acción y posición dentro del flujo</p>
+                </div>
+                <button class="modal-close-btn" onclick="cerrarModalAgregarPaso()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="step-form-group">
+                    <label for="select-nuevo-paso-posicion">Posición en la Secuencia *</label>
+                    <select id="select-nuevo-paso-posicion" onchange="actualizarVisibilidadPasoReferencia()">
+                        <option value="final">Al final de la secuencia</option>
+                        <option value="inicio">Al inicio (Paso 1, desplaza el resto)</option>
+                        <option value="intermedio">Paso intermedio (después de un paso seleccionado)</option>
+                    </select>
+                </div>
+                <div class="step-form-group" id="group-nuevo-paso-referencia" style="display: none;">
+                    <label for="select-nuevo-paso-referencia">Insertar inmediatamente después de:</label>
+                    <select id="select-nuevo-paso-referencia">
+                        <!-- Rellenado dinámicamente -->
+                    </select>
+                </div>
+                <div class="step-form-group">
+                    <label for="select-nuevo-paso-tipo">Tipo de Acción *</label>
+                    <select id="select-nuevo-paso-tipo" onchange="renderCamposDinamicosNuevoPaso()">
+                        <option value="VISITAR_PERFIL">LinkedIn: Visita de Perfil y Lectura Humana</option>
+                        <option value="ESPERAR" selected>Espera: Pausa / Delay de Tiempo (Horas)</option>
+                        <option value="ENVIAR_INVITACION">LinkedIn: Enviar Invitación a Conectar</option>
+                        <option value="ENVIAR_MENSAJE_LINKEDIN">LinkedIn: Enviar Mensaje Directo (1er Grado)</option>
+                        <option value="ENVIAR_CORREO_WORKSPACE">Google Workspace: Enviar Correo Institucional</option>
+                        <option value="VERIFICAR_ESTADO">Bifurcación: Verificar si Aceptó Conexión</option>
+                        <option value="RETIRAR_INVITACION">LinkedIn: Retirar Solicitud Pendiente</option>
+                    </select>
+                </div>
+                <div class="step-form-group">
+                    <label for="input-nuevo-paso-etiqueta">Etiqueta / Nombre Visible del Paso *</label>
+                    <input type="text" id="input-nuevo-paso-etiqueta" placeholder="Ej: Pausa de 24 Horas" required>
+                </div>
+                <div id="nuevo-paso-parametros-container">
+                    <!-- Parámetros específicos según tipo de acción -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="cerrarModalAgregarPaso()">Cancelar</button>
+                <button class="btn-primary-action" onclick="guardarNuevoPaso()">Insertar Paso</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal para Crear Nueva Lista de Leads -->
+    <div class="modal-backdrop" id="modal-nueva-lista-backdrop" onclick="cerrarModalNuevaLista()">
+        <div class="step-editor-modal" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <div>
+                    <h3>Crear Nueva Lista de Leads</h3>
+                    <p style="font-size: 0.75rem; color: var(--text-muted);">Segmenta tus directivos escolares por región, tipo o campaña</p>
+                </div>
+                <button class="modal-close-btn" onclick="cerrarModalNuevaLista()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="step-form-group">
+                    <label for="input-nueva-lista-nombre">Nombre de la Lista *</label>
+                    <input type="text" id="input-nueva-lista-nombre" placeholder="Ej: Directores Particulares Subvencionados RM" required>
+                </div>
+                <div class="step-form-group">
+                    <label for="input-nueva-lista-termino">Término de Búsqueda Asociado (LinkedIn)</label>
+                    <input type="text" id="input-nueva-lista-termino" placeholder="Ej: Director Colegio Las Condes">
+                </div>
+                <div class="step-form-group">
+                    <label for="input-nueva-lista-descripcion">Descripción u Objetivo de la Audiencia</label>
+                    <textarea id="input-nueva-lista-descripcion" placeholder="Notas sobre el segmento o campaña..."></textarea>
+                </div>
+                <div class="step-form-group">
+                    <label for="select-nueva-lista-estado">Estado Inicial</label>
+                    <select id="select-nueva-lista-estado">
+                        <option value="ACTIVA">ACTIVA (Lista para enriquecer y enrolar)</option>
+                        <option value="EXTRAYENDO">EXTRAYENDO (En proceso de extracción activa)</option>
+                        <option value="DETENIDA">DETENIDA / FIJA (Congelada para no añadir)</option>
+                    </select>
+                </div>
+                <div class="step-form-group checkbox-group" style="flex-direction: row; align-items: center; gap: 8px; margin-top: 6px;">
+                    <input type="checkbox" id="check-conectar-secuencia-inmediata" checked style="width: auto;">
+                    <label for="check-conectar-secuencia-inmediata" style="margin: 0; cursor: pointer;">Conectar automáticamente a la secuencia de outreach activa</label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="cerrarModalNuevaLista()">Cancelar</button>
+                <button class="btn-primary-action" onclick="guardarNuevaLista()">Crear Lista</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal para Conectar Lista a Secuencia -->
+    <div class="modal-backdrop" id="modal-conectar-sec-backdrop" onclick="cerrarModalConectarSecuencia()">
+        <div class="step-editor-modal" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <div>
+                    <h3 id="modal-conectar-sec-title">Vincular Lista a Secuencia</h3>
+                    <p style="font-size: 0.75rem; color: var(--text-muted);">Asocia audiencias para que avancen a través del árbol de decisión</p>
+                </div>
+                <button class="modal-close-btn" onclick="cerrarModalConectarSecuencia()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="step-form-group">
+                    <label for="select-conectar-lista-id">Seleccionar Lista de Leads (Audiencia) *</label>
+                    <select id="select-conectar-lista-id">
+                        <!-- Rellenado dinámicamente con listas de leads -->
+                    </select>
+                </div>
+                <div class="step-form-group">
+                    <label for="select-conectar-secuencia-id">Secuencia de Destino *</label>
+                    <select id="select-conectar-secuencia-id">
+                        <!-- Rellenado dinámicamente con secuencias -->
+                    </select>
+                </div>
+                <div class="step-form-group checkbox-group" style="flex-direction: row; align-items: flex-start; gap: 10px; margin-top: 10px;">
+                    <input type="checkbox" id="check-auto-ingresar-nuevos" checked style="width: auto; margin-top: 3px;">
+                    <div>
+                        <label for="check-auto-ingresar-nuevos" style="margin: 0; cursor: pointer; font-weight: 600; color: var(--text-primary);">
+                            Flujo en Tiempo Real (Auto-ingreso continuo)
+                        </label>
+                        <p style="font-size: 0.73rem; color: var(--text-muted); margin-top: 2px;">
+                            A medida que BrowserOS extraiga nuevos leads hacia esta lista, se asignarán inmediatamente al paso 1 del árbol de decisión sin requerir intervención manual.
+                        </p>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="cerrarModalConectarSecuencia()">Cancelar</button>
+                <button class="btn-primary-action" onclick="confirmarConectarListaASecuencia()">Vincular Lista</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <script src="/static/app.js?v=2.6"></script>
+</body>
+</html>

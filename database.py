@@ -1,10 +1,19 @@
 import sqlite3
 import json
 import os
+import re
 from datetime import datetime
 from contextlib import contextmanager
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 DB_PATH = os.path.join(os.path.dirname(__file__), "leads.db")
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+IS_POSTGRES = bool(DATABASE_URL and (DATABASE_URL.startswith("postgres://") or DATABASE_URL.startswith("postgresql://")))
 
 def dict_factory(cursor, row):
     d = {}
@@ -12,23 +21,146 @@ def dict_factory(cursor, row):
         d[col[0]] = row[idx]
     return d
 
+def _convert_placeholders(query: str) -> str:
+    """Replaces unquoted ? parameter placeholders with %s for PostgreSQL compatibility."""
+    if "?" not in query:
+        return query
+    parts = re.split(r"('(?:''|[^'])*')", query)
+    for i in range(0, len(parts), 2):
+        parts[i] = parts[i].replace("?", "%s")
+    return "".join(parts)
+
+class PgCursorWrapper:
+    """Cursor wrapper for PostgreSQL that converts SQLite ? placeholders to %s transparently."""
+    def __init__(self, cursor):
+        self._cur = cursor
+
+    def execute(self, query, params=None):
+        pg_query = _convert_placeholders(query)
+        if params is not None:
+            return self._cur.execute(pg_query, params)
+        return self._cur.execute(pg_query)
+
+    def executemany(self, query, params_seq):
+        pg_query = _convert_placeholders(query)
+        return self._cur.executemany(pg_query, params_seq)
+
+    def fetchone(self):
+        return self._cur.fetchone()
+
+    def fetchall(self):
+        return self._cur.fetchall()
+
+    def fetchmany(self, size=None):
+        return self._cur.fetchmany(size)
+
+    @property
+    def lastrowid(self):
+        return getattr(self._cur, "lastrowid", None)
+
+    @property
+    def rowcount(self):
+        return self._cur.rowcount
+
+    @property
+    def description(self):
+        return self._cur.description
+
+    def __iter__(self):
+        return iter(self._cur)
+
+    def close(self):
+        return self._cur.close()
+
+class PgConnWrapper:
+    """Connection wrapper for PostgreSQL exposing cursor and transaction methods."""
+    def __init__(self, raw_conn):
+        self._conn = raw_conn
+
+    def cursor(self):
+        return PgCursorWrapper(self._conn.cursor())
+
+    def execute(self, query, params=None):
+        cur = self.cursor()
+        cur.execute(query, params)
+        return cur
+
+    def commit(self):
+        return self._conn.commit()
+
+    def rollback(self):
+        return self._conn.rollback()
+
+    def close(self):
+        return self._conn.close()
+
 @contextmanager
-def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = dict_factory
-    # Habilitar claves foráneas y modo WAL para máxima concurrencia y velocidad
-    conn.execute("PRAGMA foreign_keys = ON;")
-    conn.execute("PRAGMA journal_mode = WAL;")
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+def get_db(tenant_id=None, is_super_admin=False):
+    """
+    Context manager de conexión de base de datos dual:
+    - Si DATABASE_URL está configurado: Conecta a PostgreSQL con Row-Level Security (RLS).
+    - Si no está configurado: Usa SQLite local leads.db en modo WAL.
+    """
+    if IS_POSTGRES:
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+        except ImportError:
+            raise RuntimeError("El paquete 'psycopg' es requerido para conectar a PostgreSQL. Instálalo con pip install psycopg[binary]")
+
+        conn = psycopg.connect(DATABASE_URL, row_factory=dict_row)
+        wrapped = PgConnWrapper(conn)
+        try:
+            # Configurar contexto de sesión RLS en PostgreSQL
+            with conn.cursor() as cur:
+                if is_super_admin:
+                    cur.execute("SET LOCAL app.is_super_admin = 'true';")
+                elif tenant_id:
+                    cur.execute("SET LOCAL app.is_super_admin = 'false';")
+                    cur.execute("SET LOCAL app.current_tenant_id = %s;", (tenant_id,))
+                else:
+                    cur.execute("SET LOCAL app.is_super_admin = 'true';")
+            yield wrapped
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+    else:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = dict_factory
+        conn.execute("PRAGMA foreign_keys = ON;")
+        conn.execute("PRAGMA journal_mode = WAL;")
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
 def init_db():
+    if IS_POSTGRES:
+        # En PostgreSQL, aplicar schema_postgres.sql si no existen las tablas principales
+        with get_db(is_super_admin=True) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT table_name 
+                FROM information_schema.tables 
+                WHERE table_schema = 'public' AND table_name = 'leads'
+            """)
+            if not cursor.fetchone():
+                schema_path = os.path.join(os.path.dirname(__file__), "schema_postgres.sql")
+                if os.path.exists(schema_path):
+                    with open(schema_path, "r", encoding="utf-8") as f:
+                        cursor.execute(f.read())
+            now_iso = datetime.now().isoformat()
+            seed_default_users(cursor, now_iso)
+            seed_default_sequence(cursor, now_iso)
+            seed_default_lead_list(cursor, now_iso)
+        return
     with get_db() as conn:
         cursor = conn.cursor()
         

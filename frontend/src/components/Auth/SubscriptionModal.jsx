@@ -17,10 +17,10 @@ export default function SubscriptionModal({
   onLogout,
   onUserUpdated
 }) {
-  if (!isOpen || !currentUser) return null;
-
   const [updating, setUpdating] = useState(false);
   const [feedback, setFeedback] = useState(null);
+
+  if (!isOpen || !currentUser) return null;
 
   const sub = currentUser.suscripcion || {};
   const isSuperAdmin = currentUser.rol === 'SUPER_ADMIN';

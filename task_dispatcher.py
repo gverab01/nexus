@@ -98,6 +98,8 @@ def get_next_dispatched_task() -> Dict[str, Any]:
                 ls.estado as estado_inscripcion,
                 ls.proxima_ejecucion_at,
                 l.nombre,
+                l.cargo_actual,
+                l.cargo_titular,
                 l.perfil_url,
                 l.institucion_actual,
                 l.email,
@@ -162,7 +164,7 @@ def get_next_dispatched_task() -> Dict[str, Any]:
             if template:
                 first_name = candidate["nombre"].split()[0] if candidate["nombre"] else "hola"
                 company = candidate["institucion_actual"] or "su empresa"
-                title = candidate.get("cargo_titular") or "su cargo"
+                title = candidate.get("cargo_actual") or candidate.get("cargo_titular") or "su cargo"
 
                 for var_name in ["{{nombre}}", "{nombre}"]:
                     template = template.replace(var_name, first_name)

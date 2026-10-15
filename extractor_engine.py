@@ -8,10 +8,11 @@ from typing import Dict, Any, List, Optional
 import browser_service
 import logger_service
 from database import get_db
+from lead_parser import parse_cargo_and_institucion
 
 MCP_URL = "http://127.0.0.1:9010/mcp"
 
-EXTRACTION_SCRIPT_JS = """
+EXTRACTION_SCRIPT_JS = r"""
 () => {
     const seenUrls = new Set();
     const leads = [];
@@ -38,13 +39,14 @@ EXTRACTION_SCRIPT_JS = """
         let grado = '2º';
         let cargo = '';
         let ubicacion = 'Chile';
+        let snippetActual = '';
 
         // 1. Extraer nombre del link o de la primera línea de la tarjeta
         const linkText = a.innerText.trim();
-        if (linkText && !linkText.includes('\\n') && !linkText.includes('contactos en común')) {
+        if (linkText && !linkText.includes('\n') && !linkText.includes('contactos en común')) {
             nombre = linkText;
         } else if (lines.length > 0) {
-            nombre = lines[0].split('•')[0].split('\\n')[0].trim();
+            nombre = lines[0].split('•')[0].split('\n')[0].trim();
         }
 
         if (!nombre || nombre.length < 2 || nombre.includes('contactos en común') || nombre.includes('LinkedIn')) {
@@ -52,7 +54,7 @@ EXTRACTION_SCRIPT_JS = """
         }
 
         // Limpiar sufijos decorativos
-        nombre = nombre.replace(/•.*$/g, '').replace(/Verificado|Premium|\\s+/g, ' ').trim();
+        nombre = nombre.replace(/•.*$/g, '').replace(/Verificado|Premium|\s+/g, ' ').trim();
 
         // 2. Extraer grado de red (1º, 2º, 3º+)
         for (const line of lines.slice(0, 3)) {
@@ -61,40 +63,59 @@ EXTRACTION_SCRIPT_JS = """
             else if (line.includes('3º') || line.includes('3er')) grado = '3º+';
         }
 
-        // 3. Extraer titular/cargo y ubicación
+        // 3. Extraer elementos estructurados de LinkedIn si existen
+        const subtitleEl = card.querySelector('.entity-result__primary-subtitle, [data-anonymize="headline"]');
+        const summaryEl = card.querySelector('.entity-result__summary, .linked-area .t-12');
+        const secondarySubtitleEl = card.querySelector('.entity-result__secondary-subtitle');
+
+        if (summaryEl && summaryEl.innerText) {
+            snippetActual = summaryEl.innerText.trim();
+        }
+
+        if (subtitleEl && subtitleEl.innerText) {
+            cargo = subtitleEl.innerText.trim();
+        }
+
+        if (secondarySubtitleEl && secondarySubtitleEl.innerText) {
+            ubicacion = secondarySubtitleEl.innerText.trim();
+        }
+
+        // 4. Analizar líneas si faltan datos o para encontrar snippet 'Actual:'
         for (let i = 1; i < lines.length; i++) {
             const l = lines[i];
             if (l === grado || l.includes('•') || l.includes('Pendiente') || l.includes('Conectar') || l.includes('Mensaje') || l.includes('Seguir')) {
                 continue;
+            }
+            if (!snippetActual && /^(Actual|Current|Experiencia actual)\s*:/i.test(l)) {
+                snippetActual = l;
             }
             if (!cargo) {
                 cargo = l;
             } else if (!ubicacion || ubicacion === 'Chile') {
                 if (l.includes('Chile') || l.includes('Región') || l.includes('Santiago') || l.includes('Área') || l.includes('Valparaíso') || l.includes('Concepción') || l.includes('Metropolitana')) {
                     ubicacion = l;
-                    break;
                 }
             }
         }
 
-        // 4. Extraer institución escolar o empresa
+        // 5. Extraer institución escolar o empresa preliminar
         let institucion = '';
         if (cargo.toLowerCase().includes(' en ')) {
             institucion = cargo.split(/ en /i)[1].split(';')[0].split('|')[0].trim();
         } else if (cargo.toLowerCase().includes('colegio')) {
-            const m = cargo.match(/colegio[^\\n;|,]+/i);
+            const m = cargo.match(/colegio[^\n;|,]+/i);
             if (m) institucion = m[0].trim();
         } else if (cargo.toLowerCase().includes('escuela')) {
-            const m = cargo.match(/escuela[^\\n;|,]+/i);
+            const m = cargo.match(/escuela[^\n;|,]+/i);
             if (m) institucion = m[0].trim();
         } else if (cargo.toLowerCase().includes('liceo')) {
-            const m = cargo.match(/liceo[^\\n;|,]+/i);
+            const m = cargo.match(/liceo[^\n;|,]+/i);
             if (m) institucion = m[0].trim();
         } else if (cargo.toLowerCase().includes('red ')) {
-            const m = cargo.match(/red [^\\n;|,]+/i);
+            const m = cargo.match(/red [^\n;|,]+/i);
             if (m) institucion = m[0].trim();
         } else if (cargo.toLowerCase().includes('instituto')) {
-            const m = cargo.match(/instituto[^\\n;|,]+/i);
+            const m = cargo.match(/instituto[^\n;|,]+/i);
             if (m) institucion = m[0].trim();
         }
 
@@ -103,6 +124,7 @@ EXTRACTION_SCRIPT_JS = """
             nombre: nombre,
             grado_red: grado,
             cargo_titular: cargo || 'Profesional / Directivo',
+            snippet_actual: snippetActual,
             institucion_actual: institucion || 'Institución Escolar',
             ubicacion: ubicacion || 'Chile',
             perfil_url: cleanUrl
@@ -379,6 +401,17 @@ def search_and_extract_leads(term: str, page: int = 1, auto_save: bool = True, l
         {"total_encontrados": len(extracted_leads)}
     )
 
+    # Preprocesar y extraer cargo_actual e institución limpia para cada lead
+    for lead in extracted_leads:
+        cargo_act, inst = parse_cargo_and_institucion(
+            lead.get("cargo_titular", ""),
+            snippet_actual=lead.get("snippet_actual", ""),
+            default_institucion=lead.get("institucion_actual", "")
+        )
+        lead["cargo_actual"] = cargo_act
+        if inst:
+            lead["institucion_actual"] = inst
+
     # 3. Guardar en SQLite leads.db
     new_saved_count = 0
     skipped_duplicates_count = 0
@@ -401,13 +434,14 @@ def search_and_extract_leads(term: str, page: int = 1, auto_save: bool = True, l
                     lead_id = generate_slug_id(lead["nombre"], clean_url, tenant_id=tenant_id)
                     cursor.execute("""
                         INSERT INTO leads (
-                            id, nombre, cargo_titular, institucion_actual, ubicacion,
+                            id, nombre, cargo_titular, cargo_actual, institucion_actual, ubicacion,
                             grado_red, perfil_url, estado, tenant_id, fecha_extraccion, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'EXTRAIDO', ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'EXTRAIDO', ?, ?, ?, ?)
                     """, (
                         lead_id,
                         lead["nombre"],
                         lead["cargo_titular"],
+                        lead["cargo_actual"],
                         lead["institucion_actual"],
                         lead["ubicacion"],
                         lead["grado_red"],
@@ -517,19 +551,29 @@ def import_selected_leads(leads_to_import: List[Dict[str, Any]], list_id: Option
                 all_target_ids.append(lead_id)
             else:
                 nombre = lead.get("nombre") or "Profesional de LinkedIn"
-                cargo = lead.get("cargo_titular") or lead.get("cargo") or ""
+                cargo_titular = lead.get("cargo_titular") or lead.get("cargo") or ""
+                cargo_actual = lead.get("cargo_actual")
                 institucion = lead.get("institucion_actual") or lead.get("institucion") or ""
+                if not cargo_actual:
+                    cargo_actual, parsed_inst = parse_cargo_and_institucion(
+                        cargo_titular,
+                        snippet_actual=lead.get("snippet_actual", ""),
+                        default_institucion=institucion
+                    )
+                    if not institucion:
+                        institucion = parsed_inst
+
                 ubicacion = lead.get("ubicacion") or "Chile"
                 grado_red = lead.get("grado_red") or "2°"
                 lead_id = generate_slug_id(nombre, clean_url, tenant_id=tenant_id)
 
                 cursor.execute("""
                     INSERT INTO leads (
-                        id, nombre, cargo_titular, institucion_actual, ubicacion,
+                        id, nombre, cargo_titular, cargo_actual, institucion_actual, ubicacion,
                         grado_red, perfil_url, estado, tenant_id, fecha_extraccion, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'EXTRAIDO', ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'EXTRAIDO', ?, ?, ?, ?)
                 """, (
-                    lead_id, nombre, cargo, institucion, ubicacion, grado_red, clean_url,
+                    lead_id, nombre, cargo_titular, cargo_actual, institucion, ubicacion, grado_red, clean_url,
                     tenant_id, now_iso, now_iso, now_iso
                 ))
 

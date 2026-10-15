@@ -15,7 +15,8 @@ import {
   Compass,
   Trash2,
   CalendarCheck,
-  Sparkles
+  Sparkles,
+  Briefcase
 } from 'lucide-react';
 import { saveLeadContact, fetchLeadDetail, deleteProspect, markLeadMeeting } from '../../services/api';
 
@@ -167,8 +168,9 @@ export default function LeadModal({ prospect, onClose, onUpdated }) {
               <h3 className="text-sm font-medium text-zinc-100 leading-tight">
                 {leadData.nombre || 'Sin nombre'}
               </h3>
-              <p className="text-xs text-zinc-400 mt-0.5 line-clamp-1">
-                {leadData.cargo || 'Profesional / Decisor'}
+              <p className="text-xs text-emerald-400 mt-0.5 line-clamp-1 font-medium flex items-center gap-1.5">
+                <Briefcase className="w-3 h-3 text-emerald-400 shrink-0" />
+                <span>{leadData.cargo_actual || leadData.cargo || 'Profesional / Decisor'}</span>
               </p>
             </div>
           </div>
@@ -303,6 +305,25 @@ export default function LeadModal({ prospect, onClose, onUpdated }) {
                   )}
                 </div>
               )}
+
+              {/* Cargo Actual y Titular de LinkedIn */}
+              <div className="p-3 rounded-lg bg-zinc-950/50 border border-zinc-800/80 space-y-2">
+                <div className="flex items-start gap-3">
+                  <Briefcase className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <span className="text-[11px] text-zinc-400 block font-medium">Cargo / Puesto Actual</span>
+                    <span className="font-semibold text-zinc-100 text-xs block">
+                      {leadData.cargo_actual || leadData.cargo || 'No determinado'}
+                    </span>
+                  </div>
+                </div>
+                {leadData.cargo_titular && leadData.cargo_titular !== leadData.cargo_actual && (
+                  <div className="pt-2 border-t border-zinc-800/60 pl-7 text-[11px] text-zinc-400">
+                    <span className="text-zinc-500 block text-[10px] uppercase tracking-wider">Titular de LinkedIn (Headline):</span>
+                    <span className="italic text-zinc-300 block">{leadData.cargo_titular}</span>
+                  </div>
+                )}
+              </div>
 
               {/* Institución / Empresa */}
               <div className="flex items-start gap-3 p-3 rounded-lg bg-zinc-950/50 border border-zinc-800/80">

@@ -214,7 +214,9 @@ export async function fetchProspects(estado = '', busqueda = '', tenantId = '') 
   return leads.map(l => ({
     id: l.id,
     nombre: l.nombre,
-    cargo: l.cargo_titular || l.cargo,
+    cargo_actual: l.cargo_actual || l.cargo || l.cargo_titular || 'Profesional / Decisor',
+    cargo_titular: l.cargo_titular || l.cargo || '',
+    cargo: l.cargo_actual || l.cargo_titular || l.cargo || 'Profesional / Decisor',
     institucion: l.institucion_actual || l.institucion,
     ubicacion: l.ubicacion || 'Chile',
     url_perfil: l.perfil_url || l.url_perfil,
@@ -236,7 +238,9 @@ export async function fetchLeadDetail(prospectId) {
   return {
     id: l.id,
     nombre: l.nombre,
-    cargo: l.cargo_titular || l.cargo,
+    cargo_actual: l.cargo_actual || l.cargo || l.cargo_titular || 'Profesional / Decisor',
+    cargo_titular: l.cargo_titular || l.cargo || '',
+    cargo: l.cargo_actual || l.cargo_titular || l.cargo || 'Profesional / Decisor',
     institucion: l.institucion_actual || l.institucion,
     ubicacion: l.ubicacion || 'Chile',
     url_perfil: l.perfil_url || l.url_perfil,

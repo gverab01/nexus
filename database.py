@@ -170,6 +170,7 @@ def init_db():
             id TEXT PRIMARY KEY,
             nombre TEXT NOT NULL,
             cargo_titular TEXT,
+            cargo_actual TEXT,
             institucion_actual TEXT,
             ubicacion TEXT,
             grado_red TEXT DEFAULT '2º',
@@ -509,6 +510,7 @@ def migrate_multitenant_schema(cursor):
         ],
         "leads": [
             ("tenant_id", "TEXT"),
+            ("cargo_actual", "TEXT"),
             ("fecha_reunion_agendada", "TEXT"),
             ("valor_reunion", "REAL DEFAULT 0.0")
         ],
@@ -550,12 +552,33 @@ def migrate_multitenant_schema(cursor):
     except Exception:
         pass
 
+    # Regularizar y poblar cargo_actual si está vacío
+    backfill_cargo_actual(cursor)
+
     # Migrar constraint UNIQUE de leads si sigue siendo global
     migrate_leads_unique_constraint(cursor)
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_tenant_url ON leads(tenant_id, perfil_url);")
 
     # Asegurar que cada tenant activo tenga al menos una lista por defecto
     ensure_default_lead_lists_for_all_tenants(cursor, datetime.now().isoformat())
+
+def backfill_cargo_actual(cursor):
+    """
+    Rellena el campo `cargo_actual` de manera limpia y precisa para todos los leads existentes
+    que solo tenían registrado el titular/headline de LinkedIn.
+    """
+    try:
+        from lead_parser import parse_cargo_and_institucion
+        cursor.execute("SELECT id, cargo_titular, institucion_actual FROM leads WHERE cargo_actual IS NULL OR cargo_actual = ''")
+        leads_pendientes = cursor.fetchall()
+        for l in leads_pendientes:
+            lid = l["id"] if isinstance(l, dict) else l[0]
+            titular = l["cargo_titular"] if isinstance(l, dict) else l[1]
+            inst = l["institucion_actual"] if isinstance(l, dict) else l[2]
+            c_actual, _ = parse_cargo_and_institucion(titular, default_institucion=inst)
+            cursor.execute("UPDATE leads SET cargo_actual = ? WHERE id = ?", (c_actual, lid))
+    except Exception as e:
+        print(f"[DB Migration] Warning backfilling cargo_actual: {e}")
 
 def migrate_leads_unique_constraint(cursor):
     """
@@ -583,6 +606,7 @@ def migrate_leads_unique_constraint(cursor):
                     id TEXT PRIMARY KEY,
                     nombre TEXT NOT NULL,
                     cargo_titular TEXT,
+                    cargo_actual TEXT,
                     institucion_actual TEXT,
                     ubicacion TEXT,
                     grado_red TEXT DEFAULT '2º',
@@ -609,14 +633,14 @@ def migrate_leads_unique_constraint(cursor):
             """)
             cursor.execute("""
                 INSERT INTO leads_tenant_migrated (
-                    id, nombre, cargo_titular, institucion_actual, ubicacion, grado_red,
+                    id, nombre, cargo_titular, cargo_actual, institucion_actual, ubicacion, grado_red,
                     perfil_url, email, telefono, estado, siguiendo, siguiendo_desde,
                     invitacion_retirada, fecha_retiro_invitacion, fecha_extraccion,
                     fecha_visita, fecha_invitacion, fecha_conexion, tags, notas,
                     created_at, updated_at, tenant_id, fecha_reunion_agendada, valor_reunion
                 )
                 SELECT 
-                    id, nombre, cargo_titular, institucion_actual, ubicacion, grado_red,
+                    id, nombre, cargo_titular, cargo_actual, institucion_actual, ubicacion, grado_red,
                     perfil_url, email, telefono, estado, siguiendo, siguiendo_desde,
                     invitacion_retirada, fecha_retiro_invitacion, fecha_extraccion,
                     fecha_visita, fecha_invitacion, fecha_conexion, tags, notas,

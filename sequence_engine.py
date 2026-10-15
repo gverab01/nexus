@@ -113,7 +113,7 @@ def get_full_sequence(sequence_id: str, secuencia_id: Optional[str] = None) -> O
 
         # Próximo lead candidato
         cursor.execute("""
-            SELECT ls.*, l.nombre, l.cargo_titular, l.institucion_actual,
+            SELECT ls.*, l.nombre, l.cargo_actual, l.cargo_titular, l.institucion_actual,
                    p.orden as paso_orden, p.tipo_accion, p.parametros_json
             FROM leads_en_secuencia ls
             JOIN leads l ON ls.lead_id = l.id
@@ -507,7 +507,7 @@ def get_leads_in_sequence(sequence_id: str, status: Optional[str] = None) -> Lis
     with get_db() as conn:
         cursor = conn.cursor()
         query = """
-            SELECT ls.*, l.nombre, l.cargo_titular, l.institucion_actual, l.email, l.telefono, l.perfil_url, l.estado as lead_estado,
+            SELECT ls.*, l.nombre, l.cargo_actual, l.cargo_titular, l.institucion_actual, l.email, l.telefono, l.perfil_url, l.estado as lead_estado,
                    p.tipo_accion as paso_accion, p.condicion_rama as paso_condicion, p.orden as paso_orden, p.parametros_json
             FROM leads_en_secuencia ls
             JOIN leads l ON ls.lead_id = l.id
@@ -542,7 +542,7 @@ def get_next_executable_lead(sequence_id: Optional[str] = None) -> Optional[Dict
     with get_db() as conn:
         cursor = conn.cursor()
         query = """
-            SELECT ls.*, l.nombre, l.cargo_titular, l.institucion_actual, l.email, l.telefono, l.perfil_url, l.estado as lead_estado,
+            SELECT ls.*, l.nombre, l.cargo_actual, l.cargo_titular, l.institucion_actual, l.email, l.telefono, l.perfil_url, l.estado as lead_estado,
                    p.tipo_accion, p.condicion_rama, p.parametros_json, p.orden, p.secuencia_id, s.nombre as secuencia_nombre
             FROM leads_en_secuencia ls
             JOIN leads l ON ls.lead_id = l.id
@@ -689,7 +689,7 @@ def _process_step_atom(item: Dict[str, Any]) -> Dict[str, Any]:
         if params.get("incluir_nota"):
             template = params.get("plantilla_nota", "Hola {nombre}, un gusto saludarte. Veo tu labor en {empresa}.")
             company = item.get("institucion_actual") or "tu empresa"
-            title = item.get("cargo_titular") or "tu cargo"
+            title = item.get("cargo_actual") or item.get("cargo_titular") or "tu cargo"
             first_name = lead_name.split()[0] if lead_name else "hola"
 
             text_var = template
@@ -790,7 +790,7 @@ def _process_step_atom(item: Dict[str, Any]) -> Dict[str, Any]:
             subj_tpl = params.get("asunto", "Contacto formal {empresa}")
             body_tpl = params.get("cuerpo_email", "Estimado/a {nombre},\n\nLe contacto formalmente...")
             company = item.get("institucion_actual") or "su empresa"
-            title = item.get("cargo_titular") or "su cargo"
+            title = item.get("cargo_actual") or item.get("cargo_titular") or "su cargo"
             first_name = lead_name.split()[0] if lead_name else "hola"
 
             subj = subj_tpl

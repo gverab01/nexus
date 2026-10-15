@@ -18,7 +18,8 @@ import {
   X,
   CheckSquare,
   Square,
-  AlertCircle
+  AlertCircle,
+  Briefcase
 } from 'lucide-react';
 import { 
   fetchProspects, 
@@ -569,11 +570,18 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
                         )}
                       </div>
 
-                      <div className="text-[11px] text-zinc-400 truncate">
-                        {lead.cargo_titular || lead.cargo || 'Profesional'}
-                        {lead.institucion_actual && ` · ${lead.institucion_actual}`}
-                        {lead.ubicacion && ` · ${lead.ubicacion}`}
+                      <div className="text-[11px] text-zinc-300 truncate flex items-center gap-1.5 mt-0.5">
+                        <span className="font-medium text-emerald-400">
+                          {lead.cargo_actual || lead.cargo_titular || lead.cargo || 'Profesional'}
+                        </span>
+                        {lead.institucion_actual && <span className="text-zinc-500">· {lead.institucion_actual}</span>}
+                        {lead.ubicacion && <span className="text-zinc-500">· {lead.ubicacion}</span>}
                       </div>
+                      {lead.cargo_titular && lead.cargo_titular !== lead.cargo_actual && (
+                        <div className="text-[10px] text-zinc-500 truncate italic">
+                          {lead.cargo_titular}
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -698,6 +706,7 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
                   />
                 </th>
                 <th className="py-2.5 px-3">Prospecto / Contacto</th>
+                <th className="py-2.5 px-3">Cargo / Puesto Actual</th>
                 <th className="py-2.5 px-3">Empresa / Organización</th>
                 <th className="py-2.5 px-3">Ubicación</th>
                 <th className="py-2.5 px-3">Red</th>
@@ -708,13 +717,13 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
             <tbody className="divide-y divide-white/[0.04]">
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="py-8 text-center text-zinc-500">
+                  <td colSpan={8} className="py-8 text-center text-zinc-500">
                     Cargando prospectos...
                   </td>
                 </tr>
               ) : filteredProspects.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-8 text-center text-zinc-500">
+                  <td colSpan={8} className="py-8 text-center text-zinc-500">
                     No se encontraron prospectos con este criterio.
                   </td>
                 </tr>
@@ -751,8 +760,17 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
                         <div className="font-medium text-zinc-200 group-hover:text-white transition">
                           {prospect.nombre}
                         </div>
-                        <div className="text-[11px] text-zinc-400 line-clamp-1">
-                          {prospect.cargo || 'Profesional / Decisor'}
+                        <div className="text-[11px] text-zinc-400 line-clamp-1 italic" title={prospect.cargo_titular || prospect.cargo}>
+                          {prospect.cargo_titular || prospect.cargo || 'Titular de LinkedIn'}
+                        </div>
+                      </td>
+
+                      <td className="py-3 px-3">
+                        <div className="flex items-center gap-1.5">
+                          <Briefcase className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                          <span className="font-medium text-xs text-zinc-100 truncate max-w-[210px]" title={prospect.cargo_actual || prospect.cargo}>
+                            {prospect.cargo_actual || prospect.cargo || 'Profesional / Decisor'}
+                          </span>
                         </div>
                       </td>
 

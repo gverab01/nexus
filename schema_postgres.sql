@@ -89,6 +89,7 @@ CREATE TABLE IF NOT EXISTS leads (
     tenant_id VARCHAR(64) NOT NULL DEFAULT 'ten_superadmin' REFERENCES tenants(id) ON DELETE CASCADE,
     nombre VARCHAR(255) NOT NULL,
     cargo_titular VARCHAR(255),
+    cargo_actual VARCHAR(255),
     institucion_actual VARCHAR(255),
     ubicacion VARCHAR(255),
     grado_red VARCHAR(32) DEFAULT '2º',

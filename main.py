@@ -584,9 +584,9 @@ def get_prospects(
             params.append(estado)
             
         if busqueda:
-            query += " AND (nombre LIKE ? OR cargo_titular LIKE ? OR institucion_actual LIKE ?)"
+            query += " AND (nombre LIKE ? OR cargo_actual LIKE ? OR cargo_titular LIKE ? OR institucion_actual LIKE ?)"
             term = f"%{busqueda}%"
-            params.extend([term, term, term])
+            params.extend([term, term, term, term])
             
         query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])

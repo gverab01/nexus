@@ -14,7 +14,8 @@ import {
   Briefcase,
   ShieldCheck,
   Home,
-  UserPlus
+  UserPlus,
+  LogOut
 } from 'lucide-react';
 
 export default function Sidebar({
@@ -32,7 +33,11 @@ export default function Sidebar({
   currentUser = null,
   selectedWorkspaceTenantId = '',
   selectedWorkspaceName = '',
-  onExitWorkspace = null
+  onExitWorkspace = null,
+  agencyClients = [],
+  onSelectWorkspace = null,
+  onOpenSubscriptionModal = null,
+  onLogout = null
 }) {
   const isSuperAdmin = currentUser?.rol === 'SUPER_ADMIN';
   const isAgencyAdmin = currentUser?.rol === 'AGENCY_ADMIN';
@@ -162,6 +167,52 @@ export default function Sidebar({
           </div>
         </div>
 
+        {/* Selector de Workspace para Agencia */}
+        {isAgencyAdmin && agencyClients.length > 0 && (
+          <div className="mx-2.5 mt-2.5 p-2 rounded-lg bg-zinc-900/70 border border-white/[0.08] space-y-1">
+            <div className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wider text-zinc-400">
+              <Briefcase className="w-3 h-3 text-zinc-400" />
+              <span>Workspace Activo</span>
+            </div>
+            <select
+              value={selectedWorkspaceTenantId}
+              onChange={(e) => onSelectWorkspace && onSelectWorkspace(e.target.value)}
+              className="w-full bg-[#0D0E12] border border-white/[0.08] rounded px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500 cursor-pointer"
+            >
+              <option value="" className="bg-zinc-950 text-zinc-100">🏢 Sede Agencia (Propia)</option>
+              {agencyClients.map((c) => (
+                <option key={c.id} value={c.id} className="bg-zinc-950 text-zinc-100">
+                  📁 {c.razon_social}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* Banner de Workspace para Super Admin cuando opera en una organización */}
+        {isSuperAdmin && selectedWorkspaceTenantId && (
+          <div className="mx-2.5 mt-2.5 p-2 rounded-lg bg-zinc-900/80 border border-white/[0.08] text-xs text-zinc-300 flex items-center justify-between gap-1.5">
+            <div className="min-w-0">
+              <div className="text-[10px] uppercase font-mono text-zinc-500 flex items-center gap-1">
+                <Building2 className="w-3 h-3 text-zinc-400" />
+                <span>Workspace:</span>
+              </div>
+              <div className="truncate font-medium text-xs text-zinc-200">
+                {selectedWorkspaceName || selectedWorkspaceTenantId}
+              </div>
+            </div>
+            {onExitWorkspace && (
+              <button
+                onClick={onExitWorkspace}
+                className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[10px] font-medium transition cursor-pointer shrink-0"
+                title="Volver a la Consola Master"
+              >
+                ← Salir
+              </button>
+            )}
+          </div>
+        )}
+
         {/* 2. Menú de Navegación Vertical */}
         <div className="p-2.5 space-y-0.5">
           <div className="px-2.5 pt-2 pb-1.5 text-[10px] font-medium uppercase tracking-wider text-zinc-500">
@@ -268,6 +319,43 @@ export default function Sidebar({
         <div className="text-center pt-0.5">
           <span className="text-[10px] text-zinc-600 font-mono tracking-tight">NexusReach Pro v1.0 &bull; Local IP</span>
         </div>
+
+        {/* 4. Perfil de Usuario y Logout */}
+        {currentUser && (
+          <div className="pt-2 border-t border-white/[0.06] flex items-center justify-between gap-1.5">
+            <button
+              onClick={onOpenSubscriptionModal}
+              title="Ver detalles de tu suscripción y cuenta"
+              className="flex items-center gap-2 min-w-0 flex-1 p-1.5 rounded-lg hover:bg-zinc-850 transition cursor-pointer text-left group"
+            >
+              <div className="w-7 h-7 rounded-full bg-zinc-800 border border-zinc-700/80 flex items-center justify-center text-xs font-semibold text-zinc-200 shrink-0 group-hover:border-zinc-500 transition shadow-xs">
+                {currentUser.nombre ? currentUser.nombre.substring(0, 2).toUpperCase() : 'US'}
+              </div>
+              <div className="min-w-0 leading-tight">
+                <div className="text-xs font-medium text-zinc-200 truncate group-hover:text-white transition">
+                  {currentUser.nombre || 'Usuario'}
+                </div>
+                <div className="text-[10px] font-mono text-zinc-500 truncate mt-0.5">
+                  {isSuperAdmin 
+                    ? 'Master Root' 
+                    : isAgencyAdmin 
+                    ? 'Agencia Admin' 
+                    : isSubClient 
+                    ? (currentUser.tenant?.razon_social || 'Operador')
+                    : `Plan ${currentUser.suscripcion?.plan || 'Pro'}`}
+                </div>
+              </div>
+            </button>
+
+            <button
+              onClick={onLogout}
+              title="Cerrar sesión"
+              className="p-1.5 rounded-lg bg-zinc-900/60 hover:bg-rose-950/40 hover:text-rose-400 border border-white/[0.06] hover:border-rose-500/30 text-zinc-400 transition cursor-pointer shrink-0"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
       </div>
     </aside>
   );

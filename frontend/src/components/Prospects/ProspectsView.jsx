@@ -318,8 +318,16 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
   });
 
   return (
-    <div className="space-y-5 font-sans">
-      {/* 4 Tarjetas KPI Métricas */}
+    <div className="space-y-5 font-sans animate-fadeIn">
+      {/* 1. Header de Sección */}
+      <div>
+        <h2 className="text-base font-semibold text-zinc-100 tracking-tight">Directorio de Prospectos B2B</h2>
+        <p className="text-xs text-zinc-400 mt-0.5">
+          Búsqueda directa en LinkedIn, extracción y enriquecimiento de decisores calificados
+        </p>
+      </div>
+
+      {/* 2. Tarjetas KPI Métricas */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <div className="p-3.5 rounded-xl bg-[#121316] border border-white/[0.08]">
           <div className="flex items-center justify-between text-zinc-400 text-xs mb-1.5">

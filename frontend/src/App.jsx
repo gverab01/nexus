@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
-import TopBar from './components/TopBar';
 import SafetyBanner from './components/SafetyBanner';
 import ProspectsView from './components/Prospects/ProspectsView';
 import ListsView from './components/Lists/ListsView';
@@ -245,28 +244,17 @@ export default function App() {
         onLoginLinkedin={handleLoginLinkedin}
         onViewBrowser={handleViewBrowser}
         currentUser={currentUser}
+        agencyClients={agencyClients}
         selectedWorkspaceTenantId={selectedWorkspaceTenantId}
         selectedWorkspaceName={selectedWorkspaceName}
+        onSelectWorkspace={handleSelectWorkspace}
         onExitWorkspace={handleExitWorkspace}
+        onOpenSubscriptionModal={() => setIsSubscriptionModalOpen(true)}
+        onLogout={handleLogout}
       />
 
       {/* 2. Área principal de contenido (derecha) */}
       <div className="flex-1 flex flex-col min-w-0 h-screen overflow-y-auto">
-        <TopBar
-          activeTab={activeTab}
-          linkedinSessionActive={linkedinSessionActive}
-          onLoginLinkedin={handleLoginLinkedin}
-          onViewBrowser={handleViewBrowser}
-          currentUser={currentUser}
-          onOpenSubscriptionModal={() => setIsSubscriptionModalOpen(true)}
-          onLogout={handleLogout}
-          agencyClients={agencyClients}
-          selectedWorkspaceTenantId={selectedWorkspaceTenantId}
-          selectedWorkspaceName={selectedWorkspaceName}
-          onSelectWorkspace={handleSelectWorkspace}
-          onExitWorkspace={handleExitWorkspace}
-        />
-
         <main className="flex-1 p-6 space-y-6 max-w-7xl w-full mx-auto">
           {/* Banner de seguridad y límites de prospección (oculto en Consola Master, Clientes y Crear Cuenta) */}
           {!['super_admin', 'admin_clientes', 'admin_crear_cuenta'].includes(activeTab) && (

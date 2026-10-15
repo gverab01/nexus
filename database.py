@@ -41,7 +41,7 @@ def init_db():
             institucion_actual TEXT,
             ubicacion TEXT,
             grado_red TEXT DEFAULT '2º',
-            perfil_url TEXT UNIQUE NOT NULL,
+            perfil_url TEXT NOT NULL,
             email TEXT,
             telefono TEXT,
             estado TEXT DEFAULT 'EXTRAIDO',
@@ -417,6 +417,111 @@ def migrate_multitenant_schema(cursor):
         cursor.execute("UPDATE listas_leads SET tenant_id = 'ten_superadmin' WHERE tenant_id IS NULL OR tenant_id = ''")
     except Exception:
         pass
+
+    # Migrar constraint UNIQUE de leads si sigue siendo global
+    migrate_leads_unique_constraint(cursor)
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_tenant_url ON leads(tenant_id, perfil_url);")
+
+    # Asegurar que cada tenant activo tenga al menos una lista por defecto
+    ensure_default_lead_lists_for_all_tenants(cursor, datetime.now().isoformat())
+
+def migrate_leads_unique_constraint(cursor):
+    """
+    Migrates `leads` table from legacy global UNIQUE(perfil_url) to tenant-scoped UNIQUE(tenant_id, perfil_url).
+    """
+    try:
+        cursor.execute("PRAGMA index_list(leads)")
+        indexes = cursor.fetchall()
+        has_legacy_unique = False
+        for idx in indexes:
+            idx_name = idx["name"] if isinstance(idx, dict) else idx[1]
+            idx_unique = idx["unique"] if isinstance(idx, dict) else idx[2]
+            if idx_unique and "autoindex" in str(idx_name):
+                cursor.execute(f"PRAGMA index_info({idx_name})")
+                cols = cursor.fetchall()
+                col_names = [c["name"] if isinstance(c, dict) else c[2] for c in cols]
+                if col_names == ["perfil_url"]:
+                    has_legacy_unique = True
+                    break
+
+        if has_legacy_unique:
+            cursor.execute("PRAGMA foreign_keys = OFF")
+            cursor.execute("""
+                CREATE TABLE leads_tenant_migrated (
+                    id TEXT PRIMARY KEY,
+                    nombre TEXT NOT NULL,
+                    cargo_titular TEXT,
+                    institucion_actual TEXT,
+                    ubicacion TEXT,
+                    grado_red TEXT DEFAULT '2º',
+                    perfil_url TEXT NOT NULL,
+                    email TEXT,
+                    telefono TEXT,
+                    estado TEXT DEFAULT 'EXTRAIDO',
+                    siguiendo INTEGER DEFAULT 0,
+                    siguiendo_desde TEXT,
+                    invitacion_retirada INTEGER DEFAULT 0,
+                    fecha_retiro_invitacion TEXT,
+                    fecha_extraccion TEXT,
+                    fecha_visita TEXT,
+                    fecha_invitacion TEXT,
+                    fecha_conexion TEXT,
+                    tags TEXT DEFAULT '[]',
+                    notas TEXT,
+                    created_at TEXT,
+                    updated_at TEXT,
+                    tenant_id TEXT,
+                    fecha_reunion_agendada TEXT,
+                    valor_reunion REAL DEFAULT 0.0
+                )
+            """)
+            cursor.execute("""
+                INSERT INTO leads_tenant_migrated (
+                    id, nombre, cargo_titular, institucion_actual, ubicacion, grado_red,
+                    perfil_url, email, telefono, estado, siguiendo, siguiendo_desde,
+                    invitacion_retirada, fecha_retiro_invitacion, fecha_extraccion,
+                    fecha_visita, fecha_invitacion, fecha_conexion, tags, notas,
+                    created_at, updated_at, tenant_id, fecha_reunion_agendada, valor_reunion
+                )
+                SELECT 
+                    id, nombre, cargo_titular, institucion_actual, ubicacion, grado_red,
+                    perfil_url, email, telefono, estado, siguiendo, siguiendo_desde,
+                    invitacion_retirada, fecha_retiro_invitacion, fecha_extraccion,
+                    fecha_visita, fecha_invitacion, fecha_conexion, tags, notas,
+                    created_at, updated_at, COALESCE(tenant_id, 'ten_superadmin'),
+                    fecha_reunion_agendada, valor_reunion
+                FROM leads
+            """)
+            cursor.execute("DROP TABLE leads")
+            cursor.execute("ALTER TABLE leads_tenant_migrated RENAME TO leads")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_leads_estado ON leads(estado);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_leads_tenant ON leads(tenant_id);")
+            cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_tenant_url ON leads(tenant_id, perfil_url);")
+            cursor.execute("PRAGMA foreign_keys = ON")
+    except Exception as e:
+        print(f"[DB Migration] Warning migrating leads table: {e}")
+
+def ensure_default_lead_lists_for_all_tenants(cursor, now_iso):
+    """
+    Ensures every active tenant has at least one default lead list so users can organize prospects immediately.
+    """
+    try:
+        import secrets
+        cursor.execute("SELECT id, razon_social FROM tenants WHERE estado = 'ACTIVO'")
+        tenants = cursor.fetchall()
+        for t in tenants:
+            tid = t["id"] if isinstance(t, dict) else t[0]
+            cursor.execute("SELECT COUNT(*) as total FROM listas_leads WHERE tenant_id = ?", (tid,))
+            row = cursor.fetchone()
+            count = row["total"] if isinstance(row, dict) else row[0]
+            if count == 0:
+                new_list_id = f"lista-{secrets.token_hex(4)}"
+                cursor.execute("""
+                    INSERT INTO listas_leads (id, tenant_id, nombre, descripcion, estado, created_at, updated_at)
+                    VALUES (?, ?, 'Mi Primera Lista', 'Lista inicial creada automáticamente para prospección', 'ACTIVA', ?, ?)
+                """, (new_list_id, tid, now_iso, now_iso))
+    except Exception as e:
+        print(f"[DB Migration] Warning ensuring default lists: {e}")
 
 def seed_default_users(cursor, now_iso):
     import auth_service

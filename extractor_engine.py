@@ -248,14 +248,21 @@ def _get_or_create_search_tab(target_url: str) -> Optional[int]:
         print(f"[ExtractorEngine] Error navegando: {e}")
         return 4
 
-def generate_slug_id(name: str, profile_url: str) -> str:
-    """Genera un ID único y legible para el lead."""
+def generate_slug_id(name: str, profile_url: str, tenant_id: Optional[str] = None) -> str:
+    """Genera un ID único y legible para el lead, aislado por tenant si aplica."""
     m = re.search(r'/in/([^/]+)/?', profile_url)
     if m:
         slug = urllib.parse.unquote(m.group(1)).lower().strip('-')
-        return re.sub(r'[^a-zA-Z0-9_-]+', '-', slug)
-    slug = re.sub(r'[^a-zA-Z0-9]+', '-', name.lower()).strip('-')
-    return f"{slug}-{int(datetime.now().timestamp())}"
+        base = re.sub(r'[^a-zA-Z0-9_-]+', '-', slug)
+    else:
+        slug = re.sub(r'[^a-zA-Z0-9]+', '-', name.lower()).strip('-')
+        base = f"{slug}-{int(datetime.now().timestamp())}"
+
+    if tenant_id and tenant_id != "ten_superadmin":
+        tid_suffix = tenant_id.replace("ten_", "")[:10]
+        if not base.endswith(f"_{tid_suffix}"):
+            return f"{base}_{tid_suffix}"
+    return base
 
 def search_and_extract_leads(term: str, page: int = 1, auto_save: bool = True, list_id: Optional[str] = None, tenant_id: str = "ten_superadmin") -> Dict[str, Any]:
     """
@@ -383,7 +390,7 @@ def search_and_extract_leads(term: str, page: int = 1, auto_save: bool = True, l
             cursor = conn.cursor()
             for lead in extracted_leads:
                 clean_url = lead["perfil_url"].split("?")[0]
-                cursor.execute("SELECT id FROM leads WHERE perfil_url = ? AND (tenant_id = ? OR tenant_id IS NULL)", (clean_url, tenant_id))
+                cursor.execute("SELECT id FROM leads WHERE perfil_url = ? AND tenant_id = ?", (clean_url, tenant_id))
                 exists = cursor.fetchone()
                 
                 if exists:
@@ -391,7 +398,7 @@ def search_and_extract_leads(term: str, page: int = 1, auto_save: bool = True, l
                     lead["guardado"] = False
                     lead["motivo"] = "Ya existe en la base de datos"
                 else:
-                    lead_id = generate_slug_id(lead["nombre"], clean_url)
+                    lead_id = generate_slug_id(lead["nombre"], clean_url, tenant_id=tenant_id)
                     cursor.execute("""
                         INSERT INTO leads (
                             id, nombre, cargo_titular, institucion_actual, ubicacion,
@@ -445,13 +452,13 @@ def search_and_extract_leads(term: str, page: int = 1, auto_save: bool = True, l
                     {"lista_id": list_id, "error": str(e)}
                 )
     else:
-        # Modo vista previa / selección manual: verificar existencia sin insertar en la base
+        # Modo vista previa / selección manual: verificar existencia sin insertar en la base (estrictamente por tenant_id)
         with get_db() as conn:
             cursor = conn.cursor()
             for lead in extracted_leads:
                 clean_url = lead["perfil_url"].split("?")[0]
                 lead["perfil_url"] = clean_url
-                cursor.execute("SELECT id FROM leads WHERE perfil_url = ?", (clean_url,))
+                cursor.execute("SELECT id FROM leads WHERE perfil_url = ? AND tenant_id = ?", (clean_url, tenant_id))
                 exists = cursor.fetchone()
                 if exists:
                     lead["ya_existe"] = True
@@ -459,7 +466,7 @@ def search_and_extract_leads(term: str, page: int = 1, auto_save: bool = True, l
                     lead["guardado"] = True
                 else:
                     lead["ya_existe"] = False
-                    lead["id"] = generate_slug_id(lead["nombre"], clean_url)
+                    lead["id"] = generate_slug_id(lead["nombre"], clean_url, tenant_id=tenant_id)
                     lead["guardado"] = False
 
     logger_service.log_event(
@@ -502,7 +509,7 @@ def import_selected_leads(leads_to_import: List[Dict[str, Any]], list_id: Option
             clean_url = lead.get("perfil_url", "").split("?")[0]
             if not clean_url:
                 continue
-            cursor.execute("SELECT id FROM leads WHERE perfil_url = ? AND (tenant_id = ? OR tenant_id IS NULL)", (clean_url, tenant_id))
+            cursor.execute("SELECT id FROM leads WHERE perfil_url = ? AND tenant_id = ?", (clean_url, tenant_id))
             exists = cursor.fetchone()
             if exists:
                 skipped += 1
@@ -514,7 +521,7 @@ def import_selected_leads(leads_to_import: List[Dict[str, Any]], list_id: Option
                 institucion = lead.get("institucion_actual") or lead.get("institucion") or ""
                 ubicacion = lead.get("ubicacion") or "Chile"
                 grado_red = lead.get("grado_red") or "2°"
-                lead_id = lead.get("id") or generate_slug_id(nombre, clean_url)
+                lead_id = generate_slug_id(nombre, clean_url, tenant_id=tenant_id)
 
                 cursor.execute("""
                     INSERT INTO leads (

@@ -62,13 +62,15 @@ def change_sequence_publish_status(sequence_id: str, new_status: str) -> bool:
         """, (normalized_status, is_active, now_iso, sequence_id))
         return True
 
-def get_full_sequence(sequence_id: str) -> Optional[Dict[str, Any]]:
+def get_full_sequence(sequence_id: str, secuencia_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     Obtiene la definición de una secuencia y todos sus pasos ordenados y estructurados.
     """
+    target_id = sequence_id or secuencia_id
+    secuencia_id = target_id
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM secuencias WHERE id = ?", (secuencia_id,))
+        cursor.execute("SELECT * FROM secuencias WHERE id = ?", (target_id,))
         sec = cursor.fetchone()
         if not sec:
             return None

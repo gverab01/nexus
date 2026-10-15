@@ -703,6 +703,20 @@ def create_account_full(
                     expires_iso, now_iso, now_iso
                 ))
 
+        # Crear lista inicial por defecto para que la cuenta pueda prospectar de inmediato
+        init_list_id = f"lista-{secrets.token_hex(4)}"
+        cursor.execute("""
+            INSERT INTO listas_leads (id, tenant_id, nombre, descripcion, estado, created_at, updated_at)
+            VALUES (?, ?, 'Mi Primera Lista', 'Lista inicial creada automáticamente para prospección', 'ACTIVA', ?, ?)
+        """, (init_list_id, new_tenant_id, now_iso, now_iso))
+
+        if sub_cli_id:
+            sub_list_id = f"lista-{secrets.token_hex(4)}"
+            cursor.execute("""
+                INSERT INTO listas_leads (id, tenant_id, nombre, descripcion, estado, created_at, updated_at)
+                VALUES (?, ?, 'Mi Primera Lista', 'Lista inicial creada automáticamente para prospección', 'ACTIVA', ?, ?)
+            """, (sub_list_id, sub_cli_id, now_iso, now_iso))
+
         # Registrar log de auditoría
         cursor.execute("""
             INSERT INTO audit_logs (tenant_id, usuario_id, accion, detalle_json, timestamp)

@@ -7,6 +7,7 @@ import ListsView from './components/Lists/ListsView';
 import SequencesView from './components/Sequences/SequencesView';
 import ActivityLogsView from './components/Logs/ActivityLogsView';
 import SuperAdminView from './components/Admin/SuperAdminView';
+import AdminClientsView from './components/Admin/AdminClientsView';
 import AgencyPortalView from './components/Agency/AgencyPortalView';
 import LoginView from './components/Auth/LoginView';
 import SubscriptionModal from './components/Auth/SubscriptionModal';
@@ -266,14 +267,21 @@ export default function App() {
         />
 
         <main className="flex-1 p-6 space-y-6 max-w-7xl w-full mx-auto">
-          {/* Banner de seguridad y límites de prospección (oculto en Consola Master) */}
-          {activeTab !== 'super_admin' && (
+          {/* Banner de seguridad y límites de prospección (oculto en Consola Master y Clientes) */}
+          {!['super_admin', 'admin_clientes'].includes(activeTab) && (
             <SafetyBanner quotaToday={0} quotaMax={5} />
           )}
 
           {/* Vistas modulares */}
           {activeTab === 'super_admin' && (
-            <SuperAdminView onEnterWorkspace={handleSelectWorkspace} />
+            <SuperAdminView 
+              onEnterWorkspace={handleSelectWorkspace} 
+              onNavigateToClients={() => setActiveTab('admin_clientes')}
+            />
+          )}
+
+          {activeTab === 'admin_clientes' && (
+            <AdminClientsView onEnterWorkspace={handleSelectWorkspace} />
           )}
 
           {activeTab === 'agency_portal' && (

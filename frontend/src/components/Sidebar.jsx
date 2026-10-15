@@ -12,7 +12,8 @@ import {
   Sparkles, 
   Building2,
   Briefcase,
-  ShieldCheck
+  ShieldCheck,
+  Home
 } from 'lucide-react';
 
 export default function Sidebar({
@@ -42,17 +43,13 @@ export default function Sidebar({
   const navItems = [];
 
   if (isSuperAdmin) {
-    // 1. Botón principal: Consola Master o botón de retorno si está auditando un workspace
-    navItems.push({
-      id: 'super_admin',
-      label: isInTenantWorkspace ? '← Volver a Master' : 'Consola Master',
-      icon: Building2,
-      badge: isInTenantWorkspace ? 'MASTER' : 'S-ADMIN',
-      desc: isInTenantWorkspace ? 'Salir del workspace auditado' : 'Licenciamiento global y organizaciones'
-    });
-
-    // 2. Super Admin SOLO accede a prospectos, listas y secuencias cuando ha entrado explícitamente a un workspace de cliente
     if (isInTenantWorkspace) {
+      navItems.push({
+        id: 'super_admin',
+        label: '← Volver al Inicio',
+        icon: Home,
+        badge: null
+      });
       navItems.push(
         { 
           id: 'prospectos', 
@@ -74,6 +71,21 @@ export default function Sidebar({
           icon: GitFork, 
           badge: sequencesCount,
           desc: 'Flujos del workspace'
+        }
+      );
+    } else {
+      navItems.push(
+        {
+          id: 'super_admin',
+          label: 'Inicio',
+          icon: Home,
+          badge: null
+        },
+        {
+          id: 'admin_clientes',
+          label: 'Clientes',
+          icon: Users,
+          badge: null
         }
       );
     }
@@ -243,22 +255,7 @@ export default function Sidebar({
               </div>
             </button>
           </>
-        ) : (
-          <div className="p-2.5 rounded-lg bg-zinc-900/50 border border-white/[0.06] space-y-1">
-            <div className="flex items-center justify-between text-xs font-medium text-zinc-300">
-              <div className="flex items-center gap-1.5">
-                <ShieldCheck className="w-3.5 h-3.5 text-zinc-400" />
-                <span className="font-mono text-[11px] text-zinc-200">Consola Master</span>
-              </div>
-              <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700/50 font-medium">
-                ROOT
-              </span>
-            </div>
-            <p className="text-[10px] text-zinc-500 leading-tight">
-              Gestión centralizada de licencias y organizaciones
-            </p>
-          </div>
-        )}
+        ) : null}
 
         {/* Versión sutil de la app */}
         <div className="text-center pt-0.5">

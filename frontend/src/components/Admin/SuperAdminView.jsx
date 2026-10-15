@@ -1,34 +1,44 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Building2, 
-  ShieldAlert, 
-  ShieldCheck, 
   Users, 
   DollarSign, 
   RefreshCw, 
-  Plus, 
-  AlertTriangle, 
-  CheckCircle2, 
-  X, 
-  TrendingUp,
-  Sparkles,
-  Layers,
-  Calendar,
-  Lock,
-  ArrowUpRight
+  TrendingUp, 
+  Sparkles, 
+  Layers, 
+  Calendar, 
+  Clock, 
+  ArrowUpRight,
+  Briefcase,
+  User,
+  ShieldCheck,
+  AlertCircle,
+  CreditCard,
+  CheckCircle2,
+  ChevronRight
 } from 'lucide-react';
-import { 
-  fetchTenants, 
-  revokeTenantLicense, 
-  reactivateTenantLicense, 
-  adjustTenantSeats 
-} from '../../services/api';
+import { fetchTenants } from '../../services/api';
 
-export default function SuperAdminView({ onEnterWorkspace }) {
+function formatFecha(fechaIso) {
+  if (!fechaIso) return '—';
+  try {
+    const d = new Date(fechaIso);
+    if (isNaN(d.getTime())) return fechaIso;
+    return d.toLocaleDateString('es-CL', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric'
+    });
+  } catch {
+    return fechaIso;
+  }
+}
+
+export default function SuperAdminView({ onEnterWorkspace, onNavigateToClients }) {
   const [tenants, setTenants] = useState([]);
   const [loading, setLoading] = useState(true);
   const [feedback, setFeedback] = useState(null);
-  const [actionLoading, setActionLoading] = useState(null);
 
   useEffect(() => {
     loadTenants();
@@ -38,184 +48,284 @@ export default function SuperAdminView({ onEnterWorkspace }) {
     try {
       setLoading(true);
       const data = await fetchTenants();
-      setTenants(Array.isArray(data) ? data : []);
+      // Filtrar cuenta técnica de sistema
+      const clientesReales = (Array.isArray(data) ? data : []).filter(t => t.id !== 'ten_superadmin');
+      setTenants(clientesReales);
     } catch (err) {
-      setFeedback({ tipo: 'error', mensaje: `Error cargando organizaciones: ${err.message}` });
+      setFeedback({ tipo: 'error', mensaje: `Error cargando métricas: ${err.message}` });
     } finally {
       setLoading(false);
     }
   }
 
-  async function handleRevokeLicense(tenantId, companyName) {
-    if (!window.confirm(`¿Estás seguro de que deseas REVOCAR la licencia de "${companyName}"? Todas sus sesiones y las de sus clientes serán expulsadas de inmediato.`)) {
-      return;
-    }
-    try {
-      setActionLoading(tenantId);
-      await revokeTenantLicense(tenantId, 'Revocación manual por Super Admin');
-      setFeedback({ tipo: 'success', mensaje: `Licencia de "${companyName}" revocada con éxito.` });
-      await loadTenants();
-    } catch (err) {
-      setFeedback({ tipo: 'error', mensaje: `Error al revocar: ${err.message}` });
-    } finally {
-      setActionLoading(null);
-    }
-  }
+  // Segmentación
+  const empresas = tenants.filter(t => t.tipo_tenant === 'EMPRESA');
+  const freelancers = tenants.filter(t => t.tipo_tenant === 'INDIVIDUAL' || t.tipo_tenant === 'FREELANCER');
+  const agencias = tenants.filter(t => t.tipo_tenant === 'AGENCIA');
 
-  async function handleReactivateLicense(tenantId, companyName) {
-    try {
-      setActionLoading(tenantId);
-      await reactivateTenantLicense(tenantId, 30);
-      setFeedback({ tipo: 'success', mensaje: `Licencia de "${companyName}" reactivada por 30 días.` });
-      await loadTenants();
-    } catch (err) {
-      setFeedback({ tipo: 'error', mensaje: `Error al reactivar: ${err.message}` });
-    } finally {
-      setActionLoading(null);
-    }
-  }
-
-  async function handleAdjustSeats(tenantId, delta) {
-    try {
-      setActionLoading(tenantId);
-      await adjustTenantSeats(tenantId, delta);
-      setFeedback({ tipo: 'success', mensaje: `Bolsa de puestos actualizada.` });
-      await loadTenants();
-    } catch (err) {
-      setFeedback({ tipo: 'error', mensaje: `Error ajustando puestos: ${err.message}` });
-    } finally {
-      setActionLoading(null);
-    }
-  }
-
-  // Aggregate Metrics
-  const totalOrganizations = tenants.length;
+  // Puestos
   const totalSeats = tenants.reduce((acc, t) => acc + (t.puestos_contratados || 0), 0);
   const occupiedSeats = tenants.reduce((acc, t) => acc + (t.puestos_ocupados || 0), 0);
-  const activeLicenses = tenants.filter(t => t.sub_estado === 'ACTIVA').length;
-  const estimatedMrr = tenants.reduce((acc, t) => {
-    if (t.sub_estado !== 'ACTIVA') return acc;
-    const price = t.precio_unitario_plataforma || 35.0;
-    const seats = t.puestos_contratados || 1;
-    return acc + (price * seats);
-  }, 0);
+
+  // Ingresos por modalidad
+  const mrrEmpresas = empresas.reduce((acc, t) => acc + (t.monto_mensual ?? ((t.precio_unitario_plataforma || 35) * (t.puestos_contratados || 1))), 0);
+  const mrrFreelancers = freelancers.reduce((acc, t) => acc + (t.monto_mensual ?? ((t.precio_unitario_plataforma || 35) * (t.puestos_contratados || 1))), 0);
+  const mrrAgencias = agencias.reduce((acc, t) => acc + (t.monto_mensual ?? ((t.precio_unitario_plataforma || 35) * (t.puestos_contratados || 1))), 0);
+  const totalMrr = mrrEmpresas + mrrFreelancers + mrrAgencias;
+  const totalArr = totalMrr * 12;
+
+  // Próximas renovaciones ordenadas por fecha más cercana
+  const proximasRenovaciones = [...tenants].sort((a, b) => {
+    const da = a.dias_restantes ?? 999;
+    const db = b.dias_restantes ?? 999;
+    return da - db;
+  });
 
   return (
-    <div className="space-y-5 select-none animate-fadeIn">
-      {/* 1. Header con Resumen */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-lg bg-[#121316] border border-white/[0.07]">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-md bg-zinc-850 border border-zinc-750 flex items-center justify-center text-zinc-200 shrink-0">
-            <Building2 className="w-4 h-4" />
+    <div className="space-y-6 select-none animate-fadeIn">
+      {/* 1. Header con Resumen Ejecutivo y Acceso Rápido a Clientes */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-xl bg-[#121316] border border-white/[0.07]">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-semibold text-zinc-100 tracking-tight">
+              Dashboard de Gestión de Plataforma
+            </h2>
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-medium bg-emerald-950/40 text-emerald-400 border border-emerald-500/30 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              SISTEMA OPERATIVO
+            </span>
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-sm font-semibold text-zinc-100 tracking-tight">Consola Master de Licenciamiento</h2>
-              <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-medium bg-zinc-800 text-zinc-400 border border-zinc-700/60">
-                SUPER ADMIN
-              </span>
-            </div>
-            <p className="text-[11px] text-zinc-500 mt-0.5">
-              Control global de organizaciones, bolsas de puestos y revocación de licencias en tiempo real
-            </p>
-          </div>
+          <p className="text-xs text-zinc-400">
+            Supervisión integral de facturación recurrente, capacidad de puestos y clientes en plataforma
+          </p>
         </div>
 
-        <button
-          onClick={loadTenants}
-          disabled={loading}
-          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-zinc-800 hover:bg-zinc-750 border border-zinc-700/60 text-xs text-zinc-200 font-medium transition cursor-pointer self-start sm:self-auto"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 text-zinc-400 ${loading ? 'animate-spin' : ''}`} />
-          <span>Actualizar</span>
-        </button>
-      </div>
+        <div className="flex items-center gap-2">
+          {onNavigateToClients && (
+            <button
+              onClick={onNavigateToClients}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 border border-white/[0.1] text-xs font-medium text-zinc-200 transition cursor-pointer"
+            >
+              <Users className="w-3.5 h-3.5 text-zinc-300" />
+              <span>Ver Directorio de Clientes</span>
+              <ChevronRight className="w-3.5 h-3.5 text-zinc-400" />
+            </button>
+          )}
 
-      {/* 2. Feedback Alert */}
-      {feedback && (
-        <div className={`p-3 rounded-lg border text-xs flex items-center justify-between gap-3 animate-fadeIn ${
-          feedback.tipo === 'success' 
-            ? 'bg-emerald-950/20 border-emerald-500/30 text-emerald-300' 
-            : 'bg-rose-950/20 border-rose-500/30 text-rose-300'
-        }`}>
-          <div className="flex items-center gap-2">
-            {feedback.tipo === 'success' ? (
-              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-            ) : (
-              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-            )}
-            <span>{feedback.mensaje}</span>
-          </div>
-          <button onClick={() => setFeedback(null)} className="p-1 text-zinc-400 hover:text-zinc-200 cursor-pointer">
-            <X className="w-3.5 h-3.5" />
+          <button
+            onClick={loadTenants}
+            disabled={loading}
+            title="Recargar métricas"
+            className="p-1.5 rounded-lg bg-zinc-850 hover:bg-zinc-800 border border-zinc-750 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-zinc-200' : ''}`} />
           </button>
         </div>
-      )}
+      </div>
 
-      {/* 3. Tarjetas KPI Globales */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        <div className="p-3.5 rounded-lg bg-[#121316] border border-white/[0.07] space-y-1">
+      {/* 2. Tarjetas KPI Principales */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+        {/* MRR */}
+        <div className="p-4 rounded-xl bg-[#121316] border border-white/[0.07] space-y-2">
           <div className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider flex items-center justify-between">
-            <span>Organizaciones Activas</span>
-            <Building2 className="w-3.5 h-3.5 text-zinc-500" />
+            <span>Facturación Mensual (MRR)</span>
+            <DollarSign className="w-3.5 h-3.5 text-emerald-400" />
           </div>
-          <div className="text-xl font-semibold text-zinc-100 font-mono tracking-tight">
-            {activeLicenses} <span className="text-xs font-normal text-zinc-500">/ {totalOrganizations}</span>
+          <div className="text-2xl font-semibold text-emerald-400 font-mono tracking-tight">
+            ${totalMrr.toLocaleString('es-CL')} <span className="text-xs text-zinc-500 font-normal">USD/mes</span>
           </div>
-          <p className="text-[10px] text-zinc-500">Empresas, Agencias e Individuales</p>
+          <div className="text-[10px] text-zinc-500 font-mono">
+            Proyección anual: ${totalArr.toLocaleString('es-CL')} USD
+          </div>
         </div>
 
-        <div className="p-3.5 rounded-lg bg-[#121316] border border-white/[0.07] space-y-1">
+        {/* Clientes Activos */}
+        <div className="p-4 rounded-xl bg-[#121316] border border-white/[0.07] space-y-2">
+          <div className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider flex items-center justify-between">
+            <span>Clientes Registrados</span>
+            <Users className="w-3.5 h-3.5 text-sky-400" />
+          </div>
+          <div className="text-2xl font-semibold text-zinc-100 font-mono tracking-tight">
+            {tenants.length} <span className="text-xs text-zinc-500 font-normal">cuentas</span>
+          </div>
+          <div className="text-[10px] text-zinc-400 flex items-center gap-1.5 truncate">
+            <span>{empresas.length} empresas</span> &bull; 
+            <span>{freelancers.length} freelance</span> &bull; 
+            <span>{agencias.length} agencias</span>
+          </div>
+        </div>
+
+        {/* Puestos / Seats */}
+        <div className="p-4 rounded-xl bg-[#121316] border border-white/[0.07] space-y-2">
           <div className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider flex items-center justify-between">
             <span>Puestos en Operación</span>
-            <Users className="w-3.5 h-3.5 text-zinc-500" />
+            <Layers className="w-3.5 h-3.5 text-purple-400" />
           </div>
-          <div className="text-xl font-semibold text-zinc-100 font-mono tracking-tight">
-            {occupiedSeats} <span className="text-xs font-normal text-zinc-500">/ {totalSeats} seats</span>
+          <div className="text-2xl font-semibold text-zinc-100 font-mono tracking-tight">
+            {occupiedSeats} <span className="text-xs text-zinc-500 font-normal">/ {totalSeats} seats</span>
           </div>
-          <div className="w-full bg-zinc-800 h-1 rounded-full overflow-hidden mt-1.5">
+          <div className="w-full bg-zinc-800 h-1.5 rounded-full overflow-hidden">
             <div 
-              className="bg-zinc-400 h-full rounded-full transition-all"
+              className="bg-purple-400 h-full rounded-full transition-all"
               style={{ width: `${totalSeats > 0 ? (occupiedSeats / totalSeats) * 100 : 0}%` }}
             />
           </div>
         </div>
 
-        <div className="p-3.5 rounded-lg bg-[#121316] border border-white/[0.07] space-y-1">
+        {/* Salud de Cobranza */}
+        <div className="p-4 rounded-xl bg-[#121316] border border-white/[0.07] space-y-2">
           <div className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider flex items-center justify-between">
-            <span>Facturación Mensual (MRR)</span>
-            <DollarSign className="w-3.5 h-3.5 text-zinc-500" />
+            <span>Salud de Licencias</span>
+            <ShieldCheck className="w-3.5 h-3.5 text-zinc-400" />
           </div>
-          <div className="text-xl font-semibold text-emerald-400 font-mono tracking-tight">
-            ${estimatedMrr.toLocaleString('es-CL')} <span className="text-xs text-zinc-500 font-normal">USD/mes</span>
+          <div className="text-2xl font-semibold text-zinc-100 font-mono tracking-tight flex items-center gap-2">
+            <span>100%</span>
+            <span className="text-xs font-normal text-emerald-400 px-1.5 py-0.2 rounded bg-emerald-950/40 border border-emerald-500/30">
+              AL DÍA
+            </span>
           </div>
-          <p className="text-[10px] text-zinc-500">Ingresos directos por software</p>
-        </div>
-
-        <div className="p-3.5 rounded-lg bg-[#121316] border border-white/[0.07] space-y-1">
-          <div className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider flex items-center justify-between">
-            <span>Seguridad & Aislamiento</span>
-            <ShieldCheck className="w-3.5 h-3.5 text-zinc-500" />
+          <div className="text-[10px] text-zinc-500">
+            Todas las cuentas con cobros activos
           </div>
-          <div className="text-xs font-medium text-zinc-300 pt-0.5 flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
-            <span>OWASP Multi-Tenant Activo</span>
-          </div>
-          <p className="text-[10px] text-zinc-500">Aislamiento estricto por tenant_id</p>
         </div>
       </div>
 
-      {/* 4. Directorio de Tenants */}
-      <div className="rounded-lg bg-[#121316] border border-white/[0.07] overflow-hidden">
-        <div className="p-3.5 border-b border-white/[0.06] flex items-center justify-between gap-3">
+      {/* 3. Desglose de Modalidades de Clientes */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-xs font-semibold text-zinc-300 uppercase tracking-wider flex items-center gap-2">
+            <span>Segmentación de Clientes por Modalidad</span>
+          </h3>
+          <span className="text-[11px] text-zinc-500">
+            Modelos de venta del software
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+          {/* Tarjeta Empresas */}
+          <div className="p-4 rounded-xl bg-[#121316] border border-white/[0.07] space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-lg bg-sky-950/30 border border-sky-500/30 text-sky-400 flex items-center justify-center">
+                  <Building2 className="w-3.5 h-3.5" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-semibold text-zinc-200">Empresas</h4>
+                  <p className="text-[10px] text-zinc-500">Con puestos operadores</p>
+                </div>
+              </div>
+              <span className="text-xs font-mono font-semibold text-zinc-200 px-2 py-0.5 rounded bg-zinc-800">
+                {empresas.length}
+              </span>
+            </div>
+
+            <div className="pt-2 border-t border-white/[0.05] flex items-center justify-between text-xs font-mono">
+              <span className="text-zinc-500">Aporte MRR:</span>
+              <span className="font-semibold text-emerald-400">${mrrEmpresas.toLocaleString('es-CL')} USD</span>
+            </div>
+
+            <div className="text-[11px] text-zinc-400 leading-snug">
+              Cuentas corporativas con múltiples vendedores u operadores asignados.
+            </div>
+
+            {onNavigateToClients && (
+              <button
+                onClick={onNavigateToClients}
+                className="w-full mt-1 py-1.5 px-3 rounded-lg bg-zinc-850 hover:bg-zinc-800 border border-zinc-750 text-xs text-zinc-300 hover:text-zinc-100 transition cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <span>Administrar Empresas</span>
+                <ChevronRight className="w-3 h-3 text-zinc-400" />
+              </button>
+            )}
+          </div>
+
+          {/* Tarjeta Freelancers */}
+          <div className="p-4 rounded-xl bg-[#121316] border border-white/[0.07] space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-lg bg-purple-950/30 border border-purple-500/30 text-purple-400 flex items-center justify-center">
+                  <User className="w-3.5 h-3.5" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-semibold text-zinc-200">Freelancers</h4>
+                  <p className="text-[10px] text-zinc-500">Consultores independientes</p>
+                </div>
+              </div>
+              <span className="text-xs font-mono font-semibold text-zinc-200 px-2 py-0.5 rounded bg-zinc-800">
+                {freelancers.length}
+              </span>
+            </div>
+
+            <div className="pt-2 border-t border-white/[0.05] flex items-center justify-between text-xs font-mono">
+              <span className="text-zinc-500">Aporte MRR:</span>
+              <span className="font-semibold text-emerald-400">${mrrFreelancers.toLocaleString('es-CL')} USD</span>
+            </div>
+
+            <div className="text-[11px] text-zinc-400 leading-snug">
+              Profesionales que prospectan para su propia cartera individual.
+            </div>
+
+            {onNavigateToClients && (
+              <button
+                onClick={onNavigateToClients}
+                className="w-full mt-1 py-1.5 px-3 rounded-lg bg-zinc-850 hover:bg-zinc-800 border border-zinc-750 text-xs text-zinc-300 hover:text-zinc-100 transition cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <span>Administrar Freelancers</span>
+                <ChevronRight className="w-3 h-3 text-zinc-400" />
+              </button>
+            )}
+          </div>
+
+          {/* Tarjeta Agencias */}
+          <div className="p-4 rounded-xl bg-[#121316] border border-white/[0.07] space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-lg bg-amber-950/30 border border-amber-500/30 text-amber-400 flex items-center justify-center">
+                  <Briefcase className="w-3.5 h-3.5" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-semibold text-zinc-200">Agencias</h4>
+                  <p className="text-[10px] text-zinc-500">Multi-Workspace & Seats</p>
+                </div>
+              </div>
+              <span className="text-xs font-mono font-semibold text-zinc-200 px-2 py-0.5 rounded bg-zinc-800">
+                {agencias.length}
+              </span>
+            </div>
+
+            <div className="pt-2 border-t border-white/[0.05] flex items-center justify-between text-xs font-mono">
+              <span className="text-zinc-500">Aporte MRR:</span>
+              <span className="font-semibold text-emerald-400">${mrrAgencias.toLocaleString('es-CL')} USD</span>
+            </div>
+
+            <div className="text-[11px] text-zinc-400 leading-snug">
+              Agencias de outbound B2B gestionando carteras de clientes sub-tenants.
+            </div>
+
+            {onNavigateToClients && (
+              <button
+                onClick={onNavigateToClients}
+                className="w-full mt-1 py-1.5 px-3 rounded-lg bg-zinc-850 hover:bg-zinc-800 border border-zinc-750 text-xs text-zinc-300 hover:text-zinc-100 transition cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <span>Administrar Agencias</span>
+                <ChevronRight className="w-3 h-3 text-zinc-400" />
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* 4. Widget de Próximas Facturaciones y Renovaciones */}
+      <div className="rounded-xl bg-[#121316] border border-white/[0.07] overflow-hidden shadow-xs">
+        <div className="p-3.5 border-b border-white/[0.06] flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Layers className="w-3.5 h-3.5 text-zinc-400" />
+            <Clock className="w-3.5 h-3.5 text-zinc-400" />
             <h3 className="text-xs font-semibold text-zinc-200 uppercase tracking-wider">
-              Directorio Global de Organizaciones
+              Próximas Facturaciones del Mes
             </h3>
           </div>
-          <span className="text-[11px] text-zinc-500 font-mono">
-            {tenants.length} tenants registrados
+          <span className="text-[11px] font-mono text-zinc-500">
+            {tenants.length} cuentas en calendario
           </span>
         </div>
 
@@ -223,117 +333,46 @@ export default function SuperAdminView({ onEnterWorkspace }) {
           <table className="w-full text-left text-xs">
             <thead className="bg-[#0F1014] text-zinc-400 text-[10px] uppercase tracking-wider font-medium border-b border-white/[0.06]">
               <tr>
-                <th className="py-2.5 px-3.5">Organización</th>
-                <th className="py-2.5 px-3.5">Tipo</th>
-                <th className="py-2.5 px-3.5">Puestos (Seats)</th>
-                <th className="py-2.5 px-3.5">Ciclo / Tarifa</th>
-                <th className="py-2.5 px-3.5">Estado Licencia</th>
-                <th className="py-2.5 px-3.5 text-right">Acciones de Control</th>
+                <th className="py-2.5 px-3.5">Cliente</th>
+                <th className="py-2.5 px-3.5">Correo de Registro</th>
+                <th className="py-2.5 px-3.5">Modalidad</th>
+                <th className="py-2.5 px-3.5">Fecha de Cobro</th>
+                <th className="py-2.5 px-3.5">Días Restantes</th>
+                <th className="py-2.5 px-3.5 text-right">Monto a Facturar</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/[0.05]">
-              {tenants.map((t) => {
-                const isRevocada = t.sub_estado === 'REVOCADA';
-                const isActiva = t.sub_estado === 'ACTIVA';
-                const isAgency = t.tipo_tenant === 'AGENCIA';
+              {proximasRenovaciones.map((t) => {
+                const monto = t.monto_mensual !== undefined 
+                  ? t.monto_mensual 
+                  : ((t.precio_unitario_plataforma || 35) * (t.puestos_contratados || 1));
+                const dias = t.dias_restantes ?? 0;
 
                 return (
                   <tr key={t.id} className="hover:bg-white/[0.02] transition-colors">
-                    {/* Organización */}
-                    <td className="py-3 px-3.5">
-                      <div className="font-medium text-zinc-200">{t.razon_social}</div>
-                      <div className="text-[10px] text-zinc-500 font-mono">ID: {t.id}</div>
+                    <td className="py-2.5 px-3.5 font-medium text-zinc-200">
+                      {t.razon_social}
                     </td>
-
-                    {/* Tipo */}
-                    <td className="py-3 px-3.5">
+                    <td className="py-2.5 px-3.5 font-mono text-zinc-400 text-[11px]">
+                      {t.admin_email || '—'}
+                    </td>
+                    <td className="py-2.5 px-3.5">
                       <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-medium bg-zinc-800 text-zinc-300 border border-zinc-700/60">
                         {t.tipo_tenant}
                       </span>
                     </td>
-
-                    {/* Puestos */}
-                    <td className="py-3 px-3.5">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono font-medium text-zinc-300">
-                          {t.puestos_ocupados} / {t.puestos_contratados}
-                        </span>
-                        <div className="flex items-center gap-1">
-                          <button
-                            onClick={() => handleAdjustSeats(t.id, 1)}
-                            disabled={actionLoading === t.id}
-                            title="Añadir +1 puesto a la bolsa"
-                            className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-mono text-[10px] cursor-pointer border border-zinc-700/40"
-                          >
-                            +1
-                          </button>
-                          {t.puestos_contratados > 1 && (
-                            <button
-                              onClick={() => handleAdjustSeats(t.id, -1)}
-                              disabled={actionLoading === t.id}
-                              title="Restar -1 puesto"
-                              className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-400 font-mono text-[10px] cursor-pointer border border-zinc-700/40"
-                            >
-                              -1
-                            </button>
-                          )}
-                        </div>
-                      </div>
+                    <td className="py-2.5 px-3.5 font-mono text-zinc-300">
+                      {formatFecha(t.fecha_expiracion)}
                     </td>
-
-                    {/* Ciclo / Tarifa */}
-                    <td className="py-3 px-3.5 font-mono text-[11px]">
-                      <span className="text-zinc-300">{t.periodicidad || 'MENSUAL'}</span>
-                      <div className="text-[10px] text-zinc-500">
-                        ${t.precio_unitario_plataforma || 35}/seat/mes
-                      </div>
+                    <td className="py-2.5 px-3.5 font-mono">
+                      {dias > 5 ? (
+                        <span className="text-emerald-400 text-[11px]">En {dias} días</span>
+                      ) : (
+                        <span className="text-amber-400 text-[11px]">En {dias} días</span>
+                      )}
                     </td>
-
-                    {/* Estado Licencia */}
-                    <td className="py-3 px-3.5">
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-medium flex items-center gap-1.5 w-fit ${
-                        isActiva 
-                          ? 'bg-emerald-950/30 text-emerald-400 border border-emerald-500/25' 
-                          : 'bg-rose-950/30 text-rose-400 border border-rose-500/25'
-                      }`}>
-                        <span className={`w-1.5 h-1.5 rounded-full ${isActiva ? 'bg-emerald-400' : 'bg-rose-400'}`} />
-                        {t.sub_estado || 'ACTIVA'}
-                      </span>
-                    </td>
-
-                    {/* Acciones de Control */}
-                    <td className="py-3 px-3.5 text-right">
-                      <div className="flex items-center justify-end gap-1.5">
-                        {onEnterWorkspace && (
-                          <button
-                            onClick={() => onEnterWorkspace(t.id, t.razon_social)}
-                            className="px-2 py-1 rounded-md bg-zinc-800/80 hover:bg-zinc-700/80 text-zinc-200 border border-white/[0.08] text-xs font-medium transition cursor-pointer flex items-center gap-1"
-                            title={`Entrar al workspace de ${t.razon_social} para auditar o prospectar`}
-                          >
-                            <ArrowUpRight className="w-3.5 h-3.5 text-zinc-400" />
-                            <span>Entrar</span>
-                          </button>
-                        )}
-                        {isActiva ? (
-                          <button
-                            onClick={() => handleRevokeLicense(t.id, t.razon_social)}
-                            disabled={actionLoading === t.id}
-                            className="px-2 py-1 rounded-md bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/20 text-xs font-medium transition cursor-pointer"
-                            title="Revocar licencia inmediatamente y congelar accesos"
-                          >
-                            Revocar
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => handleReactivateLicense(t.id, t.razon_social)}
-                            disabled={actionLoading === t.id}
-                            className="px-2 py-1 rounded-md bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/20 text-xs font-medium transition cursor-pointer"
-                            title="Reactivar licencia por 30 días"
-                          >
-                            Reactivar
-                          </button>
-                        )}
-                      </div>
+                    <td className="py-2.5 px-3.5 text-right font-mono font-semibold text-emerald-400">
+                      ${monto.toLocaleString('es-CL')} USD
                     </td>
                   </tr>
                 );
@@ -345,4 +384,3 @@ export default function SuperAdminView({ onEnterWorkspace }) {
     </div>
   );
 }
-

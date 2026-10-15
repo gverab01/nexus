@@ -12,7 +12,8 @@ import {
   User, 
   Building2, 
   Briefcase,
-  ChevronDown
+  ChevronDown,
+  Home
 } from 'lucide-react';
 
 export default function TopBar({
@@ -31,9 +32,14 @@ export default function TopBar({
 }) {
   const titles = {
     super_admin: {
-      title: 'Consola Master de Licenciamiento & Multi-Tenant',
-      subtitle: 'Control global de organizaciones, bolsas de puestos y revocación en tiempo real',
-      icon: Building2
+      title: 'Dashboard de Gestión de Plataforma',
+      subtitle: 'Métricas ejecutivas, capacidad de puestos y salud de facturación recurrente',
+      icon: Home
+    },
+    admin_clientes: {
+      title: 'Directorio de Clientes',
+      subtitle: 'Administración de empresas con operadores, freelancers y agencias con facturación',
+      icon: Users
     },
     agency_portal: {
       title: 'Portal de Agencia, Clientes & Unit Economics',
@@ -57,7 +63,7 @@ export default function TopBar({
     },
     logs: {
       title: 'Registro y Auditoría de Sucesos',
-      subtitle: 'Telemetría en tiempo real, eventos de seguridad y auditoría OWASP',
+      subtitle: 'Telemetría en tiempo real, eventos del sistema y trazabilidad de operaciones',
       icon: Terminal
     }
   };

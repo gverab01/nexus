@@ -452,10 +452,29 @@ def logout_user(token: str) -> bool:
 # ==============================================================================
 
 def list_global_tenants(conn=None) -> List[Dict[str, Any]]:
-    """Retorna todos los tenants con sus puestos, clientes y suscripción para el Super Admin."""
+    """Retorna todos los tenants con sus puestos, clientes, email de registro y suscripción para el Super Admin."""
     query = """
         SELECT t.*, s.periodicidad, s.estado as sub_estado, s.puestos_contratados, 
-               s.precio_unitario_plataforma, s.fecha_expiracion
+               s.precio_unitario_plataforma, s.fecha_expiracion,
+               (
+                   SELECT u.email 
+                   FROM usuarios u 
+                   WHERE u.tenant_id = t.id 
+                   ORDER BY (CASE WHEN u.rol IN ('COMPANY_ADMIN', 'AGENCY_ADMIN', 'SUPER_ADMIN') THEN 0 ELSE 1 END), u.created_at ASC 
+                   LIMIT 1
+               ) as admin_email,
+               (
+                   SELECT u.nombre 
+                   FROM usuarios u 
+                   WHERE u.tenant_id = t.id 
+                   ORDER BY (CASE WHEN u.rol IN ('COMPANY_ADMIN', 'AGENCY_ADMIN', 'SUPER_ADMIN') THEN 0 ELSE 1 END), u.created_at ASC 
+                   LIMIT 1
+               ) as admin_nombre,
+               (
+                   SELECT COUNT(*) 
+                   FROM tenants sub_t 
+                   WHERE sub_t.parent_tenant_id = t.id
+               ) as sub_clientes_count
         FROM tenants t
         LEFT JOIN suscripciones s ON s.tenant_id = t.id
         WHERE t.parent_tenant_id IS NULL
@@ -476,6 +495,10 @@ def list_global_tenants(conn=None) -> List[Dict[str, Any]]:
         item = dict(r)
         item["puestos_ocupados"] = count_occupied_seats_tenant(item["id"], conn)
         item["dias_restantes"] = calculate_days_remaining(item.get("fecha_expiracion") or "")
+        raw_price = item.get("precio_unitario_plataforma")
+        unit_price = float(raw_price) if raw_price is not None else 35.0
+        seats = int(item.get("puestos_contratados") or 1)
+        item["monto_mensual"] = round(unit_price * seats, 2)
         res.append(item)
     return res
 

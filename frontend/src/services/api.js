@@ -140,6 +140,13 @@ export async function adjustTenantSeats(tenantId, delta) {
   });
 }
 
+export async function createFullAccount(payload) {
+  return await request('/admin/cuentas', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function fetchAgencyClients(agencyId) {
   return await request(`/agencia/${agencyId}/clientes`);
 }

@@ -546,7 +546,188 @@ def update_seat_pool(tenant_id: str, seat_delta: int) -> Dict[str, Any]:
     with get_db() as c:
         c.cursor().execute("UPDATE suscripciones SET puestos_contratados = ?, updated_at = ? WHERE tenant_id = ?", (new_seats, datetime.now().isoformat(), tenant_id))
 
-    return {"exito": True, "puestos_anteriores": current_seats, "puestos_actuales": new_seats, "puestos_contratados": new_seats}
+def create_account_full(
+    tipo_cuenta: str,
+    razon_social: str,
+    admin_nombre: str,
+    admin_email: str,
+    admin_password: str,
+    precio_unitario: float = 35.0,
+    puestos_contratados: int = 1,
+    periodicidad: str = "MENSUAL",
+    operadores: Optional[List[Dict[str, str]]] = None,
+    cliente_empresa_inicial: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """Crea una cuenta completa en la plataforma (Freelancer, Empresa u Agencia) con suscripción y usuarios."""
+    tipo_norm = tipo_cuenta.upper().strip()
+    if tipo_norm not in ("FREELANCER", "EMPRESA", "AGENCIA", "INDIVIDUAL"):
+        return {"exito": False, "mensaje": f"Tipo de cuenta inválido: {tipo_cuenta}"}
+
+    if not razon_social or not razon_social.strip():
+        return {"exito": False, "mensaje": "La razón social o nombre de la cuenta es requerido."}
+    if not admin_email or "@" not in admin_email:
+        return {"exito": False, "mensaje": "El correo del administrador no es válido."}
+    if not admin_password or len(admin_password) < 4:
+        return {"exito": False, "mensaje": "La contraseña debe tener al menos 4 caracteres."}
+
+    # Verificar si el correo del admin ya existe
+    if get_user_by_email(admin_email.strip()):
+        return {"exito": False, "mensaje": f"El correo {admin_email} ya se encuentra registrado."}
+
+    # Validar correos de operadores
+    operadores = operadores or []
+    seen_emails = {admin_email.strip().lower()}
+    for op in operadores:
+        op_email = (op.get("email") or "").strip().lower()
+        if not op_email or "@" not in op_email:
+            return {"exito": False, "mensaje": f"Correo de operador inválido: {op.get('email')}"}
+        if op_email in seen_emails:
+            return {"exito": False, "mensaje": f"Correo duplicado en la solicitud: {op_email}"}
+        if get_user_by_email(op_email):
+            return {"exito": False, "mensaje": f"El correo del operador {op_email} ya existe en el sistema."}
+        seen_emails.add(op_email)
+
+    # Validar sub-cliente de agencia si viene especificado
+    sub_ops = []
+    if tipo_norm == "AGENCIA" and cliente_empresa_inicial and cliente_empresa_inicial.get("razon_social"):
+        sub_ops = cliente_empresa_inicial.get("operadores") or []
+        for sop in sub_ops:
+            sop_email = (sop.get("email") or "").strip().lower()
+            if not sop_email or "@" not in sop_email:
+                return {"exito": False, "mensaje": f"Correo de operador de sub-cliente inválido: {sop.get('email')}"}
+            if sop_email in seen_emails:
+                return {"exito": False, "mensaje": f"Correo duplicado en la solicitud: {sop_email}"}
+            if get_user_by_email(sop_email):
+                return {"exito": False, "mensaje": f"El correo {sop_email} ya existe en el sistema."}
+            seen_emails.add(sop_email)
+
+    now = datetime.now()
+    now_iso = now.isoformat()
+    days_exp = 365 if str(periodicidad).upper() == "ANUAL" else 30
+    expires_iso = (now + timedelta(days=days_exp)).isoformat()
+
+    # Mapeo de tipo_tenant y roles
+    if tipo_norm in ("FREELANCER", "INDIVIDUAL"):
+        tipo_tenant = "INDIVIDUAL"
+        admin_rol = "INDIVIDUAL"
+        final_seats = 1
+    elif tipo_norm == "EMPRESA":
+        tipo_tenant = "EMPRESA"
+        admin_rol = "COMPANY_ADMIN"
+        final_seats = max(int(puestos_contratados or 1), 1 + len(operadores))
+    elif tipo_norm == "AGENCIA":
+        tipo_tenant = "AGENCIA"
+        admin_rol = "AGENCY_ADMIN"
+        final_seats = max(int(puestos_contratados or 5), 1 + len(operadores) + len(sub_ops))
+
+    new_tenant_id = "ten_" + secrets.token_hex(5)
+    new_sub_id = "sub_" + secrets.token_hex(5)
+    new_admin_id = "usr_" + secrets.token_hex(5)
+    p_hash, salt = hash_password(admin_password)
+
+    with get_db() as c:
+        cursor = c.cursor()
+        # 1. Crear Tenant
+        cursor.execute("""
+            INSERT INTO tenants (id, parent_tenant_id, razon_social, tipo_tenant, estado, created_at, updated_at)
+            VALUES (?, NULL, ?, ?, 'ACTIVO', ?, ?)
+        """, (new_tenant_id, razon_social.strip(), tipo_tenant, now_iso, now_iso))
+
+        # 2. Crear Suscripción
+        cursor.execute("""
+            INSERT INTO suscripciones (
+                id, tenant_id, periodicidad, estado, puestos_contratados,
+                precio_unitario_plataforma, fecha_inicio, fecha_expiracion, created_at, updated_at
+            ) VALUES (?, ?, ?, 'ACTIVA', ?, ?, ?, ?, ?, ?)
+        """, (
+            new_sub_id, new_tenant_id, str(periodicidad).upper(), final_seats,
+            float(precio_unitario), now_iso, expires_iso, now_iso, now_iso
+        ))
+
+        # 3. Crear Usuario Administrador Principal
+        cursor.execute("""
+            INSERT INTO usuarios (
+                id, tenant_id, email, nombre, password_hash, salt, rol,
+                puesto_activo, estado, suscripcion_expira, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'ACTIVO', ?, ?, ?)
+        """, (
+            new_admin_id, new_tenant_id, admin_email.strip().lower(),
+            admin_nombre.strip() or razon_social.strip(),
+            p_hash, salt, admin_rol, expires_iso, now_iso, now_iso
+        ))
+
+        # 4. Crear Operadores adicionales
+        created_ops = []
+        for op in operadores:
+            op_id = "usr_" + secrets.token_hex(5)
+            op_pwd = op.get("password") or "operador123"
+            op_h, op_s = hash_password(op_pwd)
+            cursor.execute("""
+                INSERT INTO usuarios (
+                    id, tenant_id, email, nombre, password_hash, salt, rol,
+                    puesto_activo, estado, suscripcion_expira, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'COMPANY_MEMBER', 1, 'ACTIVO', ?, ?, ?)
+            """, (
+                op_id, new_tenant_id, op["email"].strip().lower(),
+                op.get("nombre", "Operador").strip(), op_h, op_s,
+                expires_iso, now_iso, now_iso
+            ))
+            created_ops.append({"id": op_id, "email": op["email"], "nombre": op.get("nombre")})
+
+        # 5. Crear Sub-cliente inicial si es Agencia
+        sub_cli_id = None
+        if tipo_norm == "AGENCIA" and cliente_empresa_inicial and cliente_empresa_inicial.get("razon_social"):
+            sub_cli_id = "ten_cli_" + secrets.token_hex(5)
+            c_name = cliente_empresa_inicial["razon_social"].strip()
+            c_model = cliente_empresa_inicial.get("modelo_cobro", "POR_PUESTO")
+            c_seats = max(1, len(sub_ops))
+            cursor.execute("""
+                INSERT INTO tenants (
+                    id, parent_tenant_id, razon_social, tipo_tenant, estado,
+                    modelo_cobro_cliente, puestos_asignados, created_at, updated_at
+                ) VALUES (?, ?, ?, 'CLIENTE_AGENCIA', 'ACTIVO', ?, ?, ?, ?)
+            """, (sub_cli_id, new_tenant_id, c_name, c_model, c_seats, now_iso, now_iso))
+
+            for sop in sub_ops:
+                sop_id = "usr_" + secrets.token_hex(5)
+                sop_pwd = sop.get("password") or "operador123"
+                sop_h, sop_s = hash_password(sop_pwd)
+                cursor.execute("""
+                    INSERT INTO usuarios (
+                        id, tenant_id, email, nombre, password_hash, salt, rol,
+                        puesto_activo, estado, suscripcion_expira, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'COMPANY_MEMBER', 1, 'ACTIVO', ?, ?, ?)
+                """, (
+                    sop_id, sub_cli_id, sop["email"].strip().lower(),
+                    sop.get("nombre", "Operador").strip(), sop_h, sop_s,
+                    expires_iso, now_iso, now_iso
+                ))
+
+        # Registrar log de auditoría
+        cursor.execute("""
+            INSERT INTO audit_logs (tenant_id, usuario_id, accion, detalle_json, timestamp)
+            VALUES (?, 'SUPER_ADMIN', 'CUENTA_CREADA', ?, ?)
+        """, (
+            new_tenant_id,
+            json.dumps({
+                "tipo_cuenta": tipo_norm,
+                "razon_social": razon_social,
+                "admin_email": admin_email,
+                "puestos": final_seats,
+                "precio_unitario": precio_unitario
+            }),
+            now_iso
+        ))
+
+    return {
+        "exito": True,
+        "tenant_id": new_tenant_id,
+        "razon_social": razon_social,
+        "tipo_cuenta": tipo_norm,
+        "admin_email": admin_email,
+        "puestos_contratados": final_seats,
+        "operadores_creados": len(created_ops) + len(sub_ops)
+    }
 
 # ==============================================================================
 # OPERACIONES DE GESTIÓN PARA AGENCIA (Agency Admin)

@@ -13,7 +13,8 @@ import {
   Building2, 
   Briefcase,
   ChevronDown,
-  Home
+  Home,
+  UserPlus
 } from 'lucide-react';
 
 export default function TopBar({
@@ -40,6 +41,11 @@ export default function TopBar({
       title: 'Directorio de Clientes',
       subtitle: 'Administración de empresas con operadores, freelancers y agencias con facturación',
       icon: Users
+    },
+    admin_crear_cuenta: {
+      title: 'Crear Nueva Cuenta',
+      subtitle: 'Alta de clientes Freelancer, Empresa con operadores o Agencia multi-cuenta',
+      icon: UserPlus
     },
     agency_portal: {
       title: 'Portal de Agencia, Clientes & Unit Economics',

@@ -8,6 +8,7 @@ import SequencesView from './components/Sequences/SequencesView';
 import ActivityLogsView from './components/Logs/ActivityLogsView';
 import SuperAdminView from './components/Admin/SuperAdminView';
 import AdminClientsView from './components/Admin/AdminClientsView';
+import CreateAccountView from './components/Admin/CreateAccountView';
 import AgencyPortalView from './components/Agency/AgencyPortalView';
 import LoginView from './components/Auth/LoginView';
 import SubscriptionModal from './components/Auth/SubscriptionModal';
@@ -267,8 +268,8 @@ export default function App() {
         />
 
         <main className="flex-1 p-6 space-y-6 max-w-7xl w-full mx-auto">
-          {/* Banner de seguridad y límites de prospección (oculto en Consola Master y Clientes) */}
-          {!['super_admin', 'admin_clientes'].includes(activeTab) && (
+          {/* Banner de seguridad y límites de prospección (oculto en Consola Master, Clientes y Crear Cuenta) */}
+          {!['super_admin', 'admin_clientes', 'admin_crear_cuenta'].includes(activeTab) && (
             <SafetyBanner quotaToday={0} quotaMax={5} />
           )}
 
@@ -281,7 +282,17 @@ export default function App() {
           )}
 
           {activeTab === 'admin_clientes' && (
-            <AdminClientsView onEnterWorkspace={handleSelectWorkspace} />
+            <AdminClientsView 
+              onEnterWorkspace={handleSelectWorkspace} 
+              onNavigateToCreateAccount={() => setActiveTab('admin_crear_cuenta')}
+            />
+          )}
+
+          {activeTab === 'admin_crear_cuenta' && (
+            <CreateAccountView 
+              onEnterWorkspace={handleSelectWorkspace} 
+              onNavigateToClients={() => setActiveTab('admin_clientes')}
+            />
           )}
 
           {activeTab === 'agency_portal' && (

@@ -19,7 +19,8 @@ import {
   Copy,
   Check,
   Layers,
-  Sparkles
+  Sparkles,
+  UserPlus
 } from 'lucide-react';
 import { 
   fetchTenants, 
@@ -43,7 +44,7 @@ function formatFecha(fechaIso) {
   }
 }
 
-export default function AdminClientsView({ onEnterWorkspace }) {
+export default function AdminClientsView({ onEnterWorkspace, onNavigateToCreateAccount }) {
   const [tenants, setTenants] = useState([]);
   const [loading, setLoading] = useState(true);
   const [feedback, setFeedback] = useState(null);
@@ -179,6 +180,16 @@ export default function AdminClientsView({ onEnterWorkspace }) {
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-zinc-200' : ''}`} />
           </button>
+
+          {onNavigateToCreateAccount && (
+            <button
+              onClick={onNavigateToCreateAccount}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-500 hover:bg-sky-400 text-zinc-950 font-semibold text-xs transition cursor-pointer shadow-xs ml-1"
+            >
+              <UserPlus className="w-3.5 h-3.5" />
+              <span>+ Crear Cuenta</span>
+            </button>
+          )}
         </div>
       </div>
 

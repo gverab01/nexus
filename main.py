@@ -182,6 +182,20 @@ class CreateAgencyClientRequest(BaseModel):
 
 CrearClienteAgenciaRequest = CreateAgencyClientRequest
 
+class CreateAccountRequest(BaseModel):
+    tipo_cuenta: str  # 'FREELANCER', 'EMPRESA', 'AGENCIA'
+    razon_social: str
+    admin_nombre: str
+    admin_email: str
+    admin_password: str
+    precio_unitario: float = 35.0
+    puestos_contratados: int = 1
+    periodicidad: str = "MENSUAL"
+    operadores: Optional[List[Dict[str, str]]] = []
+    cliente_empresa_inicial: Optional[Dict[str, Any]] = None
+
+CrearCuentaRequest = CreateAccountRequest
+
 # ==========================================
 # MULTI-TENANT & AGENCY ENDPOINTS
 # ==========================================
@@ -242,6 +256,34 @@ def get_tenants(
     if caller and caller.get("rol") != "SUPER_ADMIN":
         raise HTTPException(status_code=403, detail="Acceso denegado: Se requiere rol SUPER_ADMIN.")
     return auth_service.list_global_tenants()
+
+@app.post("/api/admin/cuentas")
+def create_account(
+    req: CreateAccountRequest,
+    authorization: Optional[str] = Header(None),
+    x_session_token: Optional[str] = Header(None, alias="X-Session-Token")
+):
+    """Creates a new client account from Super Admin (Freelancer, Empresa, Agencia)."""
+    caller = _get_current_user(authorization, x_session_token)
+    if caller and caller.get("rol") != "SUPER_ADMIN":
+        raise HTTPException(status_code=403, detail="Acceso denegado: Se requiere rol SUPER_ADMIN.")
+    res = auth_service.create_account_full(
+        tipo_cuenta=req.tipo_cuenta,
+        razon_social=req.razon_social,
+        admin_nombre=req.admin_nombre,
+        admin_email=req.admin_email,
+        admin_password=req.admin_password,
+        precio_unitario=req.precio_unitario,
+        puestos_contratados=req.puestos_contratados,
+        periodicidad=req.periodicidad,
+        operadores=req.operadores,
+        cliente_empresa_inicial=req.cliente_empresa_inicial
+    )
+    if not res.get("exito"):
+        raise HTTPException(status_code=400, detail=res.get("mensaje", "Error al crear la cuenta."))
+    return res
+
+crear_cuenta = create_account
 
 @app.post("/api/tenants/{tenant_id}/revocar")
 def revoke_tenant(

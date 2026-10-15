@@ -13,7 +13,8 @@ import {
   Building2,
   Briefcase,
   ShieldCheck,
-  Home
+  Home,
+  UserPlus
 } from 'lucide-react';
 
 export default function Sidebar({
@@ -85,6 +86,12 @@ export default function Sidebar({
           id: 'admin_clientes',
           label: 'Clientes',
           icon: Users,
+          badge: null
+        },
+        {
+          id: 'admin_crear_cuenta',
+          label: 'Crear Cuenta',
+          icon: UserPlus,
           badge: null
         }
       );

@@ -673,6 +673,61 @@ def withdraw_invitation(lead_id: str):
 
 retirar_invitacion = withdraw_invitation
 
+@app.post("/api/prospectos/{lead_id}/sincronizar-linkedin")
+def sync_lead_with_linkedin(lead_id: str):
+    """
+    Sincroniza y enriquece en vivo los datos del prospecto (cargo actual, titular,
+    empresa y ubicación) inspeccionando directamente su perfil real en LinkedIn.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM leads WHERE id = ?", (lead_id,))
+        lead = cursor.fetchone()
+        if not lead:
+            raise HTTPException(status_code=404, detail="Lead no encontrado")
+        
+        url = lead.get("perfil_url")
+        if not url:
+            raise HTTPException(status_code=400, detail="El lead no tiene URL de LinkedIn asignada")
+
+        import extractor_engine
+        enriched = extractor_engine.enrich_lead_from_live_profile(url)
+        if not enriched.get("ok"):
+            raise HTTPException(status_code=500, detail=enriched.get("error", "Error sincronizando con LinkedIn"))
+
+        now_iso = datetime.now().isoformat()
+        nuevo_nombre = enriched.get("nombre") or lead.get("nombre")
+        nuevo_titular = enriched.get("cargo_titular") or lead.get("cargo_titular")
+        nuevo_cargo_act = enriched.get("cargo_actual") or lead.get("cargo_actual")
+        nueva_inst = enriched.get("institucion_actual") or lead.get("institucion_actual")
+        nueva_ubic = enriched.get("ubicacion") or lead.get("ubicacion")
+
+        cursor.execute("""
+            UPDATE leads
+            SET nombre = ?, cargo_titular = ?, cargo_actual = ?, institucion_actual = ?, ubicacion = ?, updated_at = ?
+            WHERE id = ?
+        """, (nuevo_nombre, nuevo_titular, nuevo_cargo_act, nueva_inst, nueva_ubic, now_iso, lead_id))
+
+        cursor.execute("""
+            INSERT INTO historial_actividades (lead_id, tipo_evento, descripcion, timestamp)
+            VALUES (?, 'LEAD_SINCRONIZADO_LINKEDIN', ?, ?)
+        """, (lead_id, f"Perfil sincronizado en vivo desde LinkedIn: {nuevo_cargo_act} en {nueva_inst}", now_iso))
+
+        cursor.execute("SELECT * FROM leads WHERE id = ?", (lead_id,))
+        updated_lead = cursor.fetchone()
+        try:
+            updated_lead["tags"] = json.loads(updated_lead.get("tags") or "[]")
+        except Exception:
+            updated_lead["tags"] = []
+
+        return {
+            "status": "ok",
+            "mensaje": f"Perfil sincronizado exitosamente: {nuevo_cargo_act} en {nueva_inst}",
+            "lead": updated_lead
+        }
+
+sincronizar_lead_linkedin = sync_lead_with_linkedin
+
 @app.put("/api/prospectos/{lead_id}/contacto")
 def update_contact(lead_id: str, email: Optional[str] = None, telefono: Optional[str] = None):
     with get_db() as conn:

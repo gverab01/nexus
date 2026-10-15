@@ -164,9 +164,10 @@ def parse_cargo_and_institucion(headline: str, snippet_actual: str = "", default
         cargo_actual = 'Profesional / Directivo'
 
     if not institucion:
-        institucion = default_institucion or 'Institución Escolar'
+        institucion = default_institucion or ''
 
     institucion = re.sub(r'[|,;].*$', '', institucion).strip()
     institucion = re.sub(r'[\/|;,\-–—]+$', '', institucion).strip()
 
     return cargo_actual, institucion
+

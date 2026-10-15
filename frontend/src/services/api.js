@@ -269,6 +269,13 @@ export async function saveLeadContact(prospectId, { email, telefono }) {
   });
 }
 
+export async function syncLeadWithLinkedIn(prospectId) {
+  // Sincroniza y enriquece en vivo los datos del prospecto desde su perfil real en LinkedIn
+  return await request(`/prospectos/${prospectId}/sincronizar-linkedin`, {
+    method: 'POST',
+  });
+}
+
 export async function deleteProspect(prospectId) {
   // Elimina permanentemente un prospecto de la base de datos
   return await request(`/prospectos/${prospectId}`, {

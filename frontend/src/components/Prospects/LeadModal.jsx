@@ -16,13 +16,16 @@ import {
   Trash2,
   CalendarCheck,
   Sparkles,
-  Briefcase
+  Briefcase,
+  RefreshCw
 } from 'lucide-react';
-import { saveLeadContact, fetchLeadDetail, deleteProspect, markLeadMeeting } from '../../services/api';
+import { saveLeadContact, fetchLeadDetail, deleteProspect, markLeadMeeting, syncLeadWithLinkedIn } from '../../services/api';
 
 export default function LeadModal({ prospect, onClose, onUpdated }) {
   const [leadData, setLeadData] = useState(prospect);
   const [activeTab, setActiveTab] = useState('resumen');
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState(null);
   const [emailInput, setEmailInput] = useState(prospect.email_directo || '');
   const [phoneInput, setPhoneInput] = useState(prospect.telefono_directo || '');
   const [savingContact, setSavingContact] = useState(false);
@@ -71,6 +74,34 @@ export default function LeadModal({ prospect, onClose, onUpdated }) {
   }, [prospect?.id]);
 
   if (!prospect) return null;
+
+  async function handleSyncLinkedIn() {
+    if (!leadData?.id) return;
+    try {
+      setIsSyncing(true);
+      setSyncMessage(null);
+      const res = await syncLeadWithLinkedIn(leadData.id);
+      if (res && res.lead) {
+        const updated = res.lead;
+        setLeadData((prev) => ({
+          ...prev,
+          nombre: updated.nombre || prev.nombre,
+          cargo_actual: updated.cargo_actual || prev.cargo_actual,
+          cargo_titular: updated.cargo_titular || prev.cargo_titular,
+          cargo: updated.cargo_actual || updated.cargo_titular || prev.cargo,
+          institucion: updated.institucion_actual || prev.institucion,
+          ubicacion: updated.ubicacion || prev.ubicacion,
+        }));
+        setSyncMessage({ type: 'success', text: res.mensaje || 'Perfil sincronizado en vivo exitosamente desde LinkedIn.' });
+        if (onUpdated) onUpdated();
+      }
+    } catch (err) {
+      setSyncMessage({ type: 'error', text: err.message || 'Error sincronizando con LinkedIn' });
+    } finally {
+      setIsSyncing(false);
+      setTimeout(() => setSyncMessage(null), 5000);
+    }
+  }
 
   async function handleSaveContact() {
     try {
@@ -306,19 +337,44 @@ export default function LeadModal({ prospect, onClose, onUpdated }) {
                 </div>
               )}
 
+              {/* Feedback de sincronización con LinkedIn */}
+              {syncMessage && (
+                <div className={`p-2.5 rounded-lg text-xs flex items-center gap-2 border transition-all ${
+                  syncMessage.type === 'success' 
+                    ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300' 
+                    : 'bg-rose-950/40 border-rose-500/40 text-rose-300'
+                }`}>
+                  {syncMessage.type === 'success' ? <Check className="w-3.5 h-3.5 shrink-0" /> : <X className="w-3.5 h-3.5 shrink-0" />}
+                  <span>{syncMessage.text}</span>
+                </div>
+              )}
+
               {/* Cargo Actual y Titular de LinkedIn */}
-              <div className="p-3 rounded-lg bg-zinc-950/50 border border-zinc-800/80 space-y-2">
-                <div className="flex items-start gap-3">
-                  <Briefcase className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                  <div className="min-w-0">
-                    <span className="text-[11px] text-zinc-400 block font-medium">Cargo / Puesto Actual</span>
-                    <span className="font-semibold text-zinc-100 text-xs block">
-                      {leadData.cargo_actual || leadData.cargo || 'No determinado'}
-                    </span>
+              <div className="p-3.5 rounded-xl bg-zinc-950/60 border border-zinc-800 space-y-2">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-start gap-2.5 min-w-0">
+                    <Briefcase className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                    <div className="min-w-0">
+                      <span className="text-[10px] text-zinc-400 block font-medium uppercase tracking-wider">Cargo / Puesto Actual</span>
+                      <span className="font-semibold text-zinc-100 text-xs block">
+                        {leadData.cargo_actual || leadData.cargo || 'No determinado'}
+                      </span>
+                    </div>
                   </div>
+                  {leadData.url_perfil && (
+                    <button
+                      onClick={handleSyncLinkedIn}
+                      disabled={isSyncing}
+                      className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[11px] font-medium transition cursor-pointer disabled:opacity-50 shrink-0"
+                      title="Sincronizar y verificar en vivo los datos desde el perfil de LinkedIn"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${isSyncing ? 'animate-spin' : ''}`} />
+                      <span>{isSyncing ? 'Sincronizando...' : 'Sincronizar'}</span>
+                    </button>
+                  )}
                 </div>
                 {leadData.cargo_titular && leadData.cargo_titular !== leadData.cargo_actual && (
-                  <div className="pt-2 border-t border-zinc-800/60 pl-7 text-[11px] text-zinc-400">
+                  <div className="pt-2 border-t border-zinc-800/60 pl-6 text-[11px] text-zinc-400">
                     <span className="text-zinc-500 block text-[10px] uppercase tracking-wider">Titular de LinkedIn (Headline):</span>
                     <span className="italic text-zinc-300 block">{leadData.cargo_titular}</span>
                   </div>
@@ -393,23 +449,34 @@ export default function LeadModal({ prospect, onClose, onUpdated }) {
               </div>
 
               {/* Enlace de LinkedIn */}
-              <div className="p-3 rounded-lg bg-zinc-950/50 border border-zinc-800/80 flex items-center justify-between">
-                <div>
+              <div className="p-3 rounded-lg bg-zinc-950/50 border border-zinc-800/80 flex items-center justify-between gap-2">
+                <div className="min-w-0">
                   <span className="text-[11px] text-zinc-400 block">Perfil de LinkedIn</span>
                   <span className="text-xs text-zinc-300 font-mono truncate max-w-xs block">
                     {leadData.url_perfil}
                   </span>
                 </div>
                 {leadData.url_perfil && (
-                  <a
-                    href={leadData.url_perfil}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-1 px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-sky-400 text-xs transition"
-                  >
-                    <ExternalLink className="w-3 h-3" />
-                    <span>Abrir</span>
-                  </a>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      onClick={handleSyncLinkedIn}
+                      disabled={isSyncing}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-emerald-400 text-xs transition cursor-pointer disabled:opacity-50"
+                      title="Sincronizar datos reales desde LinkedIn"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${isSyncing ? 'animate-spin' : ''}`} />
+                      <span>{isSyncing ? 'Sincronizando...' : 'Sincronizar'}</span>
+                    </button>
+                    <a
+                      href={leadData.url_perfil}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-1 px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-sky-400 text-xs transition"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      <span>Abrir</span>
+                    </a>
+                  </div>
                 )}
               </div>
 

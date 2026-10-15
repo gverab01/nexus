@@ -28,7 +28,8 @@ import {
   triggerExtraction,
   importSelectedProspects,
   deleteProspect,
-  deleteProspectsBatch
+  deleteProspectsBatch,
+  syncLeadWithLinkedIn
 } from '../../services/api';
 import LeadModal from './LeadModal';
 
@@ -93,6 +94,7 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
   // Selección múltiple para eliminación en bloque de la base de datos
   const [selectedDirectoryIds, setSelectedDirectoryIds] = useState(new Set());
   const [isDeletingBatch, setIsDeletingBatch] = useState(false);
+  const [syncingLeadIds, setSyncingLeadIds] = useState(new Set());
 
   // Modal de detalle
   const [selectedProspect, setSelectedProspect] = useState(null);
@@ -260,6 +262,24 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
       loadLists();
     } catch (err) {
       alert(`Error eliminando prospecto: ${err.message}`);
+    }
+  }
+
+  async function handleSyncSingleProspect(prospect, e) {
+    if (e) e.stopPropagation();
+    if (!prospect?.id) return;
+    try {
+      setSyncingLeadIds((prev) => new Set(prev).add(prospect.id));
+      await syncLeadWithLinkedIn(prospect.id);
+      await loadData();
+    } catch (err) {
+      alert(`Error al sincronizar con LinkedIn: ${err.message}`);
+    } finally {
+      setSyncingLeadIds((prev) => {
+        const next = new Set(prev);
+        next.delete(prospect.id);
+        return next;
+      });
     }
   }
 
@@ -797,6 +817,16 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
 
                       <td className="py-3 px-4 text-right">
                         <div className="flex items-center justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
+                          {prospect.url_perfil && (
+                            <button
+                              onClick={(e) => handleSyncSingleProspect(prospect, e)}
+                              disabled={syncingLeadIds.has(prospect.id)}
+                              title="Sincronizar cargo, empresa y titular en vivo desde LinkedIn"
+                              className="p-1 rounded text-zinc-400 hover:text-emerald-400 hover:bg-zinc-800 transition cursor-pointer disabled:opacity-50"
+                            >
+                              <RefreshCw className={`w-3.5 h-3.5 ${syncingLeadIds.has(prospect.id) ? 'animate-spin text-emerald-400' : ''}`} />
+                            </button>
+                          )}
                           {prospect.url_perfil && (
                             <a
                               href={prospect.url_perfil}

@@ -14,127 +14,117 @@ MCP_URL = "http://127.0.0.1:9010/mcp"
 
 EXTRACTION_SCRIPT_JS = r"""
 () => {
-    const seenUrls = new Set();
-    const leads = [];
+    try {
+        const seenUrls = new Set();
+        const leads = [];
 
-    // En LinkedIn los resultados de personas son tarjetas de perfiles con links '/in/'
-    const allProfileLinks = Array.from(document.querySelectorAll('a[href*="/in/"]'));
-
-    allProfileLinks.forEach(a => {
-        const rawHref = a.href || '';
-        const cleanUrl = rawHref.split('?')[0].replace(/\\/+$/, '') + '/';
-        
-        // Ignorar enlaces secundarios o enlaces sin slug
-        if (!cleanUrl.includes('/in/') || cleanUrl.endsWith('/in/')) return;
-        if (seenUrls.has(cleanUrl)) return;
-
-        // Tarjeta contenedora de la persona
-        const card = a.closest('li') || a.closest('.entity-result') || a.closest('[data-view-name*="result"]') || a.parentElement;
-        if (!card) return;
-
-        const cardText = card.innerText ? card.innerText.trim() : '';
-        const lines = cardText.split('\\n').map(l => l.trim()).filter(Boolean);
-
-        let nombre = '';
-        let grado = '2º';
-        let cargo = '';
-        let ubicacion = 'Chile';
-        let snippetActual = '';
-
-        // 1. Extraer nombre del link o de la primera línea de la tarjeta
-        const linkText = a.innerText.trim();
-        if (linkText && !linkText.includes('\n') && !linkText.includes('contactos en común')) {
-            nombre = linkText;
-        } else if (lines.length > 0) {
-            nombre = lines[0].split('•')[0].split('\n')[0].trim();
+        // 1. Identificar lista de resultados de búsqueda de personas
+        // Compatible con LinkedIn SDUI 2026 y versiones clásicas de Chromium
+        let cardElements = [];
+        const lists = Array.from(document.querySelectorAll('[role="list"]'));
+        const searchList = lists.find(l => l.children.length >= 3 && l.children.length <= 15);
+        if (searchList) {
+            cardElements = Array.from(searchList.children);
+        } else {
+            cardElements = Array.from(document.querySelectorAll('.reusable-search__result-container, .entity-result, [componentkey*="SearchResult"]'));
         }
 
-        if (!nombre || nombre.length < 2 || nombre.includes('contactos en común') || nombre.includes('LinkedIn')) {
-            return;
+        // Si se encontraron tarjetas estructuradas, procesar tarjeta a tarjeta (AISLANDO al candidato principal)
+        if (cardElements.length > 0) {
+            cardElements.forEach(card => {
+                try {
+                    const text = card.innerText ? card.innerText.trim() : '';
+                    if (!text || text.length < 10) return;
+                    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+
+                    // Extraer únicamente el enlace del CANDIDATO PRINCIPAL (excluyendo contactos en común)
+                    const allLinks = Array.from(card.querySelectorAll('a[href*="/in/"]'));
+                    const primaryLink = allLinks.find(a => {
+                        const parent = a.closest('p') || a.parentElement;
+                        const pText = parent ? parent.innerText : '';
+                        return !pText.includes('contacto') && !pText.includes('común') && !pText.includes('mutual');
+                    }) || allLinks[0];
+
+                    if (!primaryLink) return;
+
+                    const cleanUrl = primaryLink.href.split('?')[0].replace(/\/+$/, '') + '/';
+                    if (!cleanUrl.includes('/in/') || cleanUrl.endsWith('/in/')) return;
+                    if (seenUrls.has(cleanUrl)) return;
+
+                    let nombre = '';
+                    let grado = '2º';
+                    let titular = '';
+                    let ubicacion = 'Chile';
+                    let snippetActual = '';
+
+                    // Línea 0: Nombre • Grado (ej: "Alejandro Calvo • 2º")
+                    if (lines.length > 0) {
+                        const first = lines[0];
+                        const parts = first.split('•');
+                        nombre = parts[0].replace(/Verificado|Premium|\s+/g, ' ').trim();
+                        if (parts.length > 1) {
+                            const g = parts[1].trim();
+                            if (g.includes('1º') || g.includes('1er')) grado = '1º';
+                            else if (g.includes('2º') || g.includes('2do')) grado = '2º';
+                            else if (g.includes('3º') || g.includes('3er')) grado = '3º+';
+                        }
+                    }
+
+                    if (!nombre || nombre.includes('contacto') || nombre.includes('LinkedIn')) return;
+
+                    // Buscar snippet explícito "Actual:"
+                    const snipLine = lines.find(l => /^(Actual|Current|Experiencia actual)\s*:/i.test(l));
+                    if (snipLine) snippetActual = snipLine;
+
+                    // Extraer titular y ubicación entre las líneas
+                    for (let i = 1; i < lines.length; i++) {
+                        const l = lines[i];
+                        if (l === grado || l.includes('•') || l.includes('Conectar') || l.includes('Pendiente') || l.includes('Mensaje') || l.includes('contacto') || l.includes('común')) {
+                            continue;
+                        }
+                        if (/^(Actual|Current|Experiencia actual)\s*:/i.test(l)) {
+                            continue;
+                        }
+                        if (!titular) {
+                            titular = l;
+                        } else if (!ubicacion || ubicacion === 'Chile') {
+                            if (l.includes('Chile') || l.includes('Santiago') || l.includes('Región') || l.includes('Área') || l.includes('Valparaíso') || l.includes('Concepción') || l.includes('Metropolitana')) {
+                                ubicacion = l;
+                                break;
+                            }
+                        }
+                    }
+
+                    // Extraer institución si viene en el titular o snippet
+                    let institucion = '';
+                    const sourceText = snippetActual || titular;
+                    if (sourceText.toLowerCase().includes(' en ')) {
+                        institucion = sourceText.split(/ en /i)[1].split(';')[0].split('|')[0].trim();
+                    } else if (sourceText.toLowerCase().includes(' at ')) {
+                        institucion = sourceText.split(/ at /i)[1].split(';')[0].split('|')[0].trim();
+                    }
+
+                    seenUrls.add(cleanUrl);
+                    leads.push({
+                        nombre: nombre,
+                        grado_red: grado,
+                        cargo_titular: titular || 'Profesional',
+                        snippet_actual: snippetActual,
+                        institucion_actual: institucion,
+                        ubicacion: ubicacion || 'Chile',
+                        perfil_url: cleanUrl
+                    });
+                } catch (e) {}
+            });
         }
 
-        // Limpiar sufijos decorativos
-        nombre = nombre.replace(/•.*$/g, '').replace(/Verificado|Premium|\s+/g, ' ').trim();
-
-        // 2. Extraer grado de red (1º, 2º, 3º+)
-        for (const line of lines.slice(0, 3)) {
-            if (line.includes('1º') || line.includes('1er')) grado = '1º';
-            else if (line.includes('2º') || line.includes('2do')) grado = '2º';
-            else if (line.includes('3º') || line.includes('3er')) grado = '3º+';
-        }
-
-        // 3. Extraer elementos estructurados de LinkedIn si existen
-        const subtitleEl = card.querySelector('.entity-result__primary-subtitle, [data-anonymize="headline"]');
-        const summaryEl = card.querySelector('.entity-result__summary, .linked-area .t-12');
-        const secondarySubtitleEl = card.querySelector('.entity-result__secondary-subtitle');
-
-        if (summaryEl && summaryEl.innerText) {
-            snippetActual = summaryEl.innerText.trim();
-        }
-
-        if (subtitleEl && subtitleEl.innerText) {
-            cargo = subtitleEl.innerText.trim();
-        }
-
-        if (secondarySubtitleEl && secondarySubtitleEl.innerText) {
-            ubicacion = secondarySubtitleEl.innerText.trim();
-        }
-
-        // 4. Analizar líneas si faltan datos o para encontrar snippet 'Actual:'
-        for (let i = 1; i < lines.length; i++) {
-            const l = lines[i];
-            if (l === grado || l.includes('•') || l.includes('Pendiente') || l.includes('Conectar') || l.includes('Mensaje') || l.includes('Seguir')) {
-                continue;
-            }
-            if (!snippetActual && /^(Actual|Current|Experiencia actual)\s*:/i.test(l)) {
-                snippetActual = l;
-            }
-            if (!cargo) {
-                cargo = l;
-            } else if (!ubicacion || ubicacion === 'Chile') {
-                if (l.includes('Chile') || l.includes('Región') || l.includes('Santiago') || l.includes('Área') || l.includes('Valparaíso') || l.includes('Concepción') || l.includes('Metropolitana')) {
-                    ubicacion = l;
-                }
-            }
-        }
-
-        // 5. Extraer institución escolar o empresa preliminar
-        let institucion = '';
-        if (cargo.toLowerCase().includes(' en ')) {
-            institucion = cargo.split(/ en /i)[1].split(';')[0].split('|')[0].trim();
-        } else if (cargo.toLowerCase().includes('colegio')) {
-            const m = cargo.match(/colegio[^\n;|,]+/i);
-            if (m) institucion = m[0].trim();
-        } else if (cargo.toLowerCase().includes('escuela')) {
-            const m = cargo.match(/escuela[^\n;|,]+/i);
-            if (m) institucion = m[0].trim();
-        } else if (cargo.toLowerCase().includes('liceo')) {
-            const m = cargo.match(/liceo[^\n;|,]+/i);
-            if (m) institucion = m[0].trim();
-        } else if (cargo.toLowerCase().includes('red ')) {
-            const m = cargo.match(/red [^\n;|,]+/i);
-            if (m) institucion = m[0].trim();
-        } else if (cargo.toLowerCase().includes('instituto')) {
-            const m = cargo.match(/instituto[^\n;|,]+/i);
-            if (m) institucion = m[0].trim();
-        }
-
-        seenUrls.add(cleanUrl);
-        leads.push({
-            nombre: nombre,
-            grado_red: grado,
-            cargo_titular: cargo || 'Profesional / Directivo',
-            snippet_actual: snippetActual,
-            institucion_actual: institucion || 'Institución Escolar',
-            ubicacion: ubicacion || 'Chile',
-            perfil_url: cleanUrl
-        });
-    });
-
-    return {
-        total: leads.length,
-        leads: leads
-    };
+        return {
+            total: leads.length,
+            leads: leads
+        };
+    } catch (err) {
+        return { total: 0, leads: [], error: err.message };
+    }
 }
 """
 SCRIPT_EXTRACCION_JS = EXTRACTION_SCRIPT_JS
@@ -643,6 +633,87 @@ def delete_leads_batch(lead_ids: List[str]) -> int:
     logger_service.log_event("INFO", "DATABASE", f"{len(lead_ids)} prospectos eliminados en lote de la base.")
     return len(lead_ids)
 
+def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
+    """
+    Navega o inspecciona el perfil activo en el navegador de trabajo para extraer
+    con máxima fidelidad el nombre, titular, cargo actual, empresa u organización y ubicación real.
+    """
+    import time
+    if not profile_url:
+        return {"ok": False, "error": "URL de perfil no especificada"}
+
+    clean_url = profile_url.split("?")[0].replace("/+$/", "") + "/"
+    browser_service.open_url(clean_url)
+    time.sleep(3.2)
+
+    script = r"""
+    (() => {
+        try {
+            const all = Array.from(document.querySelectorAll('*'));
+            
+            // 1. Nombre
+            const h1 = document.querySelector('main h1') || document.querySelector('h1');
+            let name = h1 ? h1.innerText.trim() : '';
+            if (!name) {
+                const nameNode = all.find(el => el.children.length === 0 && el.innerText && el.innerText.length > 2 && el.innerText.length < 50 && el.closest('main'));
+                if (nameNode) name = nameNode.innerText.trim();
+            }
+
+            // 2. Headline / Titular
+            let headline = '';
+            const headNode = all.find(el => {
+                if (el.children.length !== 0 || !el.innerText) return false;
+                const t = el.innerText.trim();
+                return t.length > 5 && t.length < 160 && (t.includes(' en ') || t.includes(' at ') || t.includes('CEO') || t.includes('Director') || t.includes('Fundador') || t.includes('Gerente') || t.includes('Líder') || t.includes('Manager'));
+            });
+            if (headNode) headline = headNode.innerText.trim();
+
+            // 3. Ubicación
+            let location = '';
+            const locNode = all.find(el => {
+                if (el.children.length !== 0 || !el.innerText) return false;
+                const t = el.innerText.trim();
+                return (t.includes('Chile') || t.includes('Santiago') || t.includes('Región') || t.includes('Valparaíso') || t.includes('Concepción')) && t.length < 80;
+            });
+            if (locNode) location = locNode.innerText.trim().replace(/·.*$/, '').trim();
+
+            // 4. Empresa / Experiencia actual
+            let expCompany = '';
+            const compNode = all.find(el => {
+                if (el.children.length !== 0 || !el.innerText) return false;
+                const parent = el.parentElement;
+                return parent && parent.tagName === 'BUTTON' && el.innerText.length > 2 && el.innerText.length < 60;
+            });
+            if (compNode) expCompany = compNode.innerText.trim().split('·')[0].trim();
+
+            return {
+                ok: true,
+                nombre: name,
+                headline: headline,
+                location: location,
+                company: expCompany
+            };
+        } catch (e) {
+            return { ok: false, error: e.message };
+        }
+    })()
+    """
+
+    res = browser_service._call_mcp_evaluate(script)
+    if isinstance(res, dict) and res.get("ok"):
+        headline = res.get("headline", "")
+        company = res.get("company", "")
+        c_act, inst = parse_cargo_and_institucion(headline, default_institucion=company)
+        return {
+            "ok": True,
+            "nombre": res.get("nombre") or "",
+            "cargo_titular": headline,
+            "cargo_actual": c_act,
+            "institucion_actual": inst,
+            "ubicacion": res.get("location") or "Chile"
+        }
+    return {"ok": False, "error": res.get("error", "No se pudo leer el DOM del perfil") if isinstance(res, dict) else str(res)}
+
 # ==========================================
 # ALIASES FOR BACKWARD COMPATIBILITY
 # ==========================================
@@ -652,4 +723,5 @@ buscar_y_extraer_leads = search_and_extract_leads
 importar_leads_seleccionados = import_selected_leads
 eliminar_lead = delete_lead
 eliminar_leads_lote = delete_leads_batch
+enriquecer_lead_perfil_en_vivo = enrich_lead_from_live_profile
 

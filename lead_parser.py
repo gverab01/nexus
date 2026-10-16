@@ -39,6 +39,8 @@ COMMON_TITLES_PREFIX = [
     r'^coordinador[a]?\b',
     r'^encargad[oa]\s+de\s+convivencia\s+escolar\b',
     r'^encargad[oa]\b',
+    r'^profesor[a]?\b',
+    r'^docente\b',
     r'^psic[oó]log[oa]\s+educacional\b',
     r'^psic[oó]log[oa]\s+convivencia\s+escolar\b',
     r'^psic[oó]log[oa]\b',

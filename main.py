@@ -696,7 +696,9 @@ def sync_lead_with_linkedin(lead_id: str):
             raise HTTPException(status_code=500, detail=enriched.get("error", "Error sincronizando con LinkedIn"))
 
         now_iso = datetime.now().isoformat()
-        nuevo_nombre = enriched.get("nombre") or lead.get("nombre")
+        nuevo_nombre = enriched.get("nombre")
+        if not nuevo_nombre or "esta página no existe" in nuevo_nombre.lower() or "404" in nuevo_nombre.lower():
+            nuevo_nombre = lead.get("nombre")
         nuevo_titular = enriched.get("cargo_titular") or lead.get("cargo_titular")
         nuevo_cargo_act = enriched.get("cargo_actual") or lead.get("cargo_actual")
         nueva_inst = enriched.get("institucion_actual") or lead.get("institucion_actual")

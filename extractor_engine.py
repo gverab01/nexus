@@ -639,59 +639,111 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
     con máxima fidelidad el nombre, titular, cargo actual, empresa u organización y ubicación real.
     """
     import time
+    import re
     if not profile_url:
         return {"ok": False, "error": "URL de perfil no especificada"}
 
-    clean_url = profile_url.split("?")[0].replace("/+$/", "") + "/"
+    clean_url = re.sub(r'/+$', '', profile_url.split("?")[0].strip()) + "/"
     browser_service.open_url(clean_url)
-    time.sleep(3.2)
+    time.sleep(3.5)
 
     script = r"""
     (() => {
         try {
-            const all = Array.from(document.querySelectorAll('*'));
-            
-            // 1. Nombre
-            const h1 = document.querySelector('main h1') || document.querySelector('h1');
-            let name = h1 ? h1.innerText.trim() : '';
-            if (!name) {
-                const nameNode = all.find(el => el.children.length === 0 && el.innerText && el.innerText.length > 2 && el.innerText.length < 50 && el.closest('main'));
-                if (nameNode) name = nameNode.innerText.trim();
+            const url = window.location.href;
+            const pageTitle = (document.title || '').trim();
+
+            // 0. Detección estricta de 404 o página no encontrada
+            if (url.includes('/404') || 
+                pageTitle.toLowerCase().includes('esta página no existe') || 
+                pageTitle.toLowerCase().includes('page not found') || 
+                (document.body && document.body.innerText.includes('Esta página no existe'))) {
+                return {
+                    ok: false,
+                    is_404: true,
+                    error: 'Página no encontrada en LinkedIn (404)'
+                };
             }
 
-            // 2. Headline / Titular
+            // 1. Extraer Nombre real del perfil
+            let name = '';
+            if (pageTitle.includes('|')) {
+                name = pageTitle.split('|')[0].trim();
+            } else if (pageTitle.includes('-')) {
+                name = pageTitle.split('-')[0].trim();
+            }
+
+            if (!name || name === 'LinkedIn' || name.toLowerCase().includes('esta página no existe')) {
+                const h2 = document.querySelector('main h2') || document.querySelector('h1') || document.querySelector('h2');
+                if (h2) name = h2.innerText.trim();
+            }
+
+            // Si el nombre sigue conteniendo 404, abortar
+            if (name.toLowerCase().includes('esta página no existe')) {
+                return { ok: false, error: 'Página no encontrada en LinkedIn (404)' };
+            }
+
+            // 2. Extraer textos relevantes del perfil
+            const allElements = Array.from(document.querySelectorAll('main h1, main h2, main h3, main p, main span, main a, div[data-sdui-screen] p, div[data-sdui-screen] span'))
+                .filter(el => el.children.length === 0 && (el.innerText || '').trim().length > 0)
+                .map(el => el.innerText.trim());
+
+            const isExcluded = (t) => {
+                if (!t) return true;
+                if (t === name) return true;
+                if (t.startsWith('·') || t.startsWith('•')) return true;
+                if (t.includes('contacto') || t.includes('seguidor') || t.includes('más en común')) return true;
+                if (['Información de contacto', 'Enviar mensaje', 'Enviar', 'Más', 'Seguir', 'Conectar', 'Guardar', 'Recomendar'].includes(t)) return true;
+                return false;
+            };
+
+            const cleanItems = allElements.filter(t => !isExcluded(t));
+
+            // 3. Titular / Headline
             let headline = '';
-            const headNode = all.find(el => {
-                if (el.children.length !== 0 || !el.innerText) return false;
-                const t = el.innerText.trim();
-                return t.length > 5 && t.length < 160 && (t.includes(' en ') || t.includes(' at ') || t.includes('CEO') || t.includes('Director') || t.includes('Fundador') || t.includes('Gerente') || t.includes('Líder') || t.includes('Manager'));
-            });
-            if (headNode) headline = headNode.innerText.trim();
+            for (const t of cleanItems) {
+                if (t.length >= 10 && t.length <= 250) {
+                    headline = t;
+                    break;
+                }
+            }
 
-            // 3. Ubicación
-            let location = '';
-            const locNode = all.find(el => {
-                if (el.children.length !== 0 || !el.innerText) return false;
-                const t = el.innerText.trim();
-                return (t.includes('Chile') || t.includes('Santiago') || t.includes('Región') || t.includes('Valparaíso') || t.includes('Concepción')) && t.length < 80;
-            });
-            if (locNode) location = locNode.innerText.trim().replace(/·.*$/, '').trim();
+            // 4. Ubicación
+            let location = 'Chile';
+            for (const t of cleanItems) {
+                if ((t.includes('Chile') || t.includes('Santiago') || t.includes('Región') || t.includes('Valparaíso') || t.includes('Concepción') || t.includes('Antofagasta')) && t.length < 80) {
+                    location = t.replace(/·.*$/, '').trim();
+                    break;
+                }
+            }
 
-            // 4. Empresa / Experiencia actual
-            let expCompany = '';
-            const compNode = all.find(el => {
-                if (el.children.length !== 0 || !el.innerText) return false;
-                const parent = el.parentElement;
-                return parent && parent.tagName === 'BUTTON' && el.innerText.length > 2 && el.innerText.length < 60;
-            });
-            if (compNode) expCompany = compNode.innerText.trim().split('·')[0].trim();
+            // 5. Empresa u Organización actual
+            let company = '';
+            // Buscar palabras clave institucionales o corporativas en el perfil
+            const orgKeywords = ['colegio', 'liceo', 'escuela', 'universidad', 'instituto', 'fundación', 'holding', 'spa', 'ltda', 'foods', 'group', 'consulting', 'solutions', 'tech'];
+            for (const t of cleanItems) {
+                if (t === headline || t === location || t === name) continue;
+                if (orgKeywords.some(k => t.toLowerCase().includes(k)) && t.length < 70) {
+                    company = t;
+                    break;
+                }
+            }
+
+            // Si no se encontró por palabras clave pero el titular tiene " en " o " at "
+            if (!company && headline) {
+                const matchEn = headline.match(/\s+(?:en|at|@)\s+([^|;•\n\–\—]+)/i);
+                if (matchEn && matchEn[1]) {
+                    company = matchEn[1].trim();
+                }
+            }
 
             return {
                 ok: true,
                 nombre: name,
                 headline: headline,
+                company: company,
                 location: location,
-                company: expCompany
+                url: url
             };
         } catch (e) {
             return { ok: false, error: e.message };
@@ -701,16 +753,24 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
 
     res = browser_service._call_mcp_evaluate(script)
     if isinstance(res, dict) and res.get("ok"):
-        headline = res.get("headline", "")
-        company = res.get("company", "")
+        res_data = res.get("result") if "result" in res and isinstance(res.get("result"), dict) else res
+        if not res_data.get("ok"):
+            return {"ok": False, "error": res_data.get("error", "Error extrayendo datos del perfil")}
+
+        nombre = res_data.get("nombre") or ""
+        if "esta página no existe" in nombre.lower():
+            return {"ok": False, "error": "Página no encontrada en LinkedIn (404)"}
+
+        headline = res_data.get("headline", "")
+        company = res_data.get("company", "")
         c_act, inst = parse_cargo_and_institucion(headline, default_institucion=company)
         return {
             "ok": True,
-            "nombre": res.get("nombre") or "",
+            "nombre": nombre,
             "cargo_titular": headline,
             "cargo_actual": c_act,
-            "institucion_actual": inst,
-            "ubicacion": res.get("location") or "Chile"
+            "institucion_actual": inst or company or "Empresa u Organización",
+            "ubicacion": res_data.get("location") or "Chile"
         }
     return {"ok": False, "error": res.get("error", "No se pudo leer el DOM del perfil") if isinstance(res, dict) else str(res)}
 

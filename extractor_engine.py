@@ -647,10 +647,32 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
     browser_service.open_url(clean_url)
     time.sleep(3.2)
 
-    # Scroll para cargar la sección de Experiencia (lazy loading en SDUI)
-    scroll_script = "(() => { const ws = document.getElementById('workspace') || document.querySelector('main'); if (ws) ws.scrollTop = 1200; return true; })()"
+    # Activar lazy loading de la sección de Experiencia (IntersectionObserver en SDUI de LinkedIn)
+    scroll_script = """(() => {
+        const sections = Array.from(document.querySelectorAll('section'));
+        for (const s of sections) {
+            const h2 = s.querySelector('h2');
+            const h2Text = h2 ? (h2.innerText || '').toLowerCase() : '';
+            if (h2Text.includes('experiencia') || h2Text.includes('experience')) {
+                s.scrollIntoView({ behavior: 'auto', block: 'center' });
+                return true;
+            }
+            if (s.querySelector('div[style*="width: 18rem"]') || (s.innerText.trim() === '' && s.children.length > 0)) {
+                s.scrollIntoView({ behavior: 'auto', block: 'center' });
+                return true;
+            }
+        }
+        const expAnchor = document.getElementById('experience');
+        if (expAnchor) {
+            expAnchor.scrollIntoView({ behavior: 'auto', block: 'center' });
+            return true;
+        }
+        const ws = document.getElementById('workspace') || document.querySelector('main');
+        if (ws) ws.scrollTop = 1800;
+        return true;
+    })()"""
     browser_service._call_mcp_evaluate(scroll_script)
-    time.sleep(1.8)
+    time.sleep(2.5)
 
     script = r"""
     (() => {
@@ -708,9 +730,19 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
                     const dateIdx = lines.findIndex(l => l.toLowerCase().includes('actualidad') || l.toLowerCase().includes('present') || l.toLowerCase().includes('presente'));
                     if (dateIdx === 1) {
                         expRole = lines[0];
+                        let parentBox = jobContainer.parentElement;
+                        while (parentBox && parentBox.innerText.split('\n').filter(Boolean).length <= lines.length && parentBox.parentElement) {
+                            parentBox = parentBox.parentElement;
+                        }
+                        if (parentBox) {
+                            const parentLines = parentBox.innerText.split('\n').map(l => l.trim()).filter(Boolean);
+                            if (parentLines.length > 0 && parentLines[0] !== expRole) {
+                                expCompany = parentLines[0].replace(/[·•|;].*$/, '').trim();
+                            }
+                        }
                     } else if (dateIdx >= 2) {
                         expRole = lines[0];
-                        expCompany = lines[1].replace(/·.*$/, '').trim();
+                        expCompany = lines[1].replace(/[·•|;].*$/, '').trim();
                     }
                 }
             }
@@ -743,8 +775,9 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
             // Ubicación
             let location = 'Chile';
             for (const t of cleanItems) {
-                if ((t.includes('Chile') || t.includes('Santiago') || t.includes('Región') || t.includes('Valparaíso') || t.includes('Concepción') || t.includes('Antofagasta')) && t.length < 80) {
-                    location = t.replace(/·.*$/, '').trim();
+                if (t === headline || t === name || t === expRole || t === expCompany) continue;
+                if ((t === 'Chile' || t.startsWith('Chile') || t.includes('Santiago') || t.includes('Región') || t.includes('Valparaíso') || t.includes('Concepción') || t.includes('Antofagasta')) && t.length < 80) {
+                    location = t.replace(/[·•|;].*$/, '').trim();
                     break;
                 }
             }
@@ -756,7 +789,7 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
                 for (const t of cleanItems) {
                     if (t === headline || t === location || t === name || t === expRole) continue;
                     if (orgKeywords.some(k => t.toLowerCase().includes(k)) && t.length < 70) {
-                        company = t;
+                        company = t.replace(/[·•|;].*$/, '').trim();
                         break;
                     }
                 }
@@ -805,6 +838,13 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
             inst = exp_company or company
         else:
             c_act, inst = parse_cargo_and_institucion(headline, default_institucion=company)
+
+        if inst:
+            inst = re.sub(r'[|,;·•].*$', '', inst).strip()
+            inst = re.sub(r'[\/|;,\-–—]+$', '', inst).strip()
+        if c_act:
+            c_act = re.sub(r'[|,;·•].*$', '', c_act).strip()
+            c_act = re.sub(r'[\/|;,\-–—]+$', '', c_act).strip()
 
         return {
             "ok": True,

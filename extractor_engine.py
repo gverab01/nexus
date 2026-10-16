@@ -99,9 +99,9 @@ EXTRACTION_SCRIPT_JS = r"""
                     let institucion = '';
                     const sourceText = snippetActual || titular;
                     if (sourceText.toLowerCase().includes(' en ')) {
-                        institucion = sourceText.split(/ en /i)[1].split(';')[0].split('|')[0].trim();
+                        institucion = sourceText.split(/ en /i)[1].split(/[;|\·•]/)[0].trim();
                     } else if (sourceText.toLowerCase().includes(' at ')) {
-                        institucion = sourceText.split(/ at /i)[1].split(';')[0].split('|')[0].trim();
+                        institucion = sourceText.split(/ at /i)[1].split(/[;|\·•]/)[0].trim();
                     }
 
                     seenUrls.add(cleanUrl);
@@ -712,6 +712,27 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
             // 2. Extraer Cargo Actual y Empresa desde la sección de EXPERIENCIA laboral en vivo
             let expRole = '';
             let expCompany = '';
+
+            const isEmploymentType = (t) => {
+                if (!t) return false;
+                const clean = t.toLowerCase().trim();
+                const types = [
+                    'jornada completa', 'jornada parcial', 'tiempo completo', 'medio tiempo',
+                    'profesional independiente', 'autónomo', 'autónoma', 'contrato temporal',
+                    'contrato de prácticas', 'contrato de formación', 'de temporada', 'en prácticas',
+                    'full-time', 'part-time', 'self-employed', 'freelance', 'contract', 'internship', 'seasonal'
+                ];
+                return types.some(type => clean === type || clean.startsWith(type + ' ·') || clean.startsWith(type + '•') || clean.startsWith(type + ' -'));
+            };
+
+            const isDuration = (t) => {
+                if (!t) return false;
+                const clean = t.toLowerCase().trim();
+                return (clean.includes('año') || clean.includes('mes') || clean.includes('yr') || clean.includes('mo')) && 
+                       /\d/.test(clean) && 
+                       !clean.includes('actualidad') && !clean.includes('present');
+            };
+
             const allNodes = Array.from(document.querySelectorAll('*'));
             const dateElement = allNodes.find(el => {
                 if (el.children.length !== 0) return false;
@@ -728,21 +749,28 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
                 if (jobContainer) {
                     const lines = jobContainer.innerText.split('\n').map(l => l.trim()).filter(Boolean);
                     const dateIdx = lines.findIndex(l => l.toLowerCase().includes('actualidad') || l.toLowerCase().includes('present') || l.toLowerCase().includes('presente'));
-                    if (dateIdx === 1) {
-                        expRole = lines[0];
-                        let parentBox = jobContainer.parentElement;
-                        while (parentBox && parentBox.innerText.split('\n').filter(Boolean).length <= lines.length && parentBox.parentElement) {
-                            parentBox = parentBox.parentElement;
-                        }
-                        if (parentBox) {
-                            const parentLines = parentBox.innerText.split('\n').map(l => l.trim()).filter(Boolean);
-                            if (parentLines.length > 0 && parentLines[0] !== expRole) {
-                                expCompany = parentLines[0].replace(/[·•|;].*$/, '').trim();
-                            }
-                        }
-                    } else if (dateIdx >= 2) {
-                        expRole = lines[0];
+                    
+                    expRole = lines[0];
+
+                    if (dateIdx >= 2 && !isEmploymentType(lines[1])) {
                         expCompany = lines[1].replace(/[·•|;].*$/, '').trim();
+                    }
+
+                    // Si expCompany no se encontró o era un tipo de jornada ("Jornada completa", "Full-time"),
+                    // buscar en la jerarquía superior (estructura multi-cargo de LinkedIn)
+                    if (!expCompany || isEmploymentType(expCompany)) {
+                        expCompany = '';
+                        let curr = jobContainer.parentElement;
+                        while (curr && curr.tagName !== 'SECTION' && curr.tagName !== 'MAIN') {
+                            const pLines = curr.innerText.split('\n').map(l => l.trim()).filter(Boolean);
+                            if (pLines.length >= 2 && pLines[0] !== expRole && pLines[0] !== 'Experiencia' && !isEmploymentType(pLines[0])) {
+                                if (isDuration(pLines[1]) || pLines[1] === expRole || isEmploymentType(pLines[1])) {
+                                    expCompany = pLines[0].replace(/[·•|;].*$/, '').trim();
+                                    break;
+                                }
+                            }
+                            curr = curr.parentElement;
+                        }
                     }
                 }
             }
@@ -757,6 +785,7 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
                 if (t === name) return true;
                 if (t.startsWith('·') || t.startsWith('•')) return true;
                 if (t.includes('contacto') || t.includes('seguidor') || t.includes('más en común')) return true;
+                if (isEmploymentType(t)) return true;
                 if (['Información de contacto', 'Enviar mensaje', 'Enviar', 'Más', 'Seguir', 'Conectar', 'Guardar', 'Recomendar'].includes(t)) return true;
                 return false;
             };
@@ -785,9 +814,9 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
             // Empresa alternativa por keywords si no se encontró en experiencia
             let company = expCompany;
             if (!company) {
-                const orgKeywords = ['colegio', 'liceo', 'escuela', 'universidad', 'instituto', 'fundación', 'holding', 'spa', 'ltda', 'foods', 'group', 'consulting', 'solutions', 'tech'];
+                const orgKeywords = ['colegio', 'liceo', 'escuela', 'universidad', 'instituto', 'fundación', 'holding', 'spa', 'ltda', 'foods', 'group', 'grupo', 'consulting', 'solutions', 'tech'];
                 for (const t of cleanItems) {
-                    if (t === headline || t === location || t === name || t === expRole) continue;
+                    if (t === headline || t === location || t === name || t === expRole || isEmploymentType(t)) continue;
                     if (orgKeywords.some(k => t.toLowerCase().includes(k)) && t.length < 70) {
                         company = t.replace(/[·•|;].*$/, '').trim();
                         break;
@@ -798,7 +827,7 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
             if (!company && headline) {
                 const matchEn = headline.match(/\s+(?:en|at|@)\s+([^|;•·\n\–\—]+)/i);
                 if (matchEn && matchEn[1]) {
-                    company = matchEn[1].trim();
+                    company = matchEn[1].replace(/[·•|;].*$/, '').trim();
                 }
             }
 
@@ -833,11 +862,31 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
         headline = res_data.get("headline", "")
         company = exp_company or res_data.get("company", "")
 
+        EMPLOYMENT_TYPES = {
+            'jornada completa', 'jornada parcial', 'tiempo completo', 'medio tiempo',
+            'profesional independiente', 'autónomo', 'autónoma', 'contrato temporal',
+            'contrato de prácticas', 'contrato de formación', 'de temporada', 'en prácticas',
+            'full-time', 'part-time', 'self-employed', 'freelance', 'contract', 'internship', 'seasonal'
+        }
+
+        if company and company.lower().strip() in EMPLOYMENT_TYPES:
+            company = ""
+        if exp_company and exp_company.lower().strip() in EMPLOYMENT_TYPES:
+            exp_company = ""
+
         if exp_role:
             c_act = exp_role
             inst = exp_company or company
         else:
             c_act, inst = parse_cargo_and_institucion(headline, default_institucion=company)
+
+        if not inst and headline:
+            match_en = re.search(r'\s+(?:en|at|@)\s+([^|;•·\n\–\—]+)', headline, re.IGNORECASE)
+            if match_en:
+                inst = match_en.group(1).strip()
+
+        if inst and inst.lower().strip() in EMPLOYMENT_TYPES:
+            inst = ""
 
         if inst:
             inst = re.sub(r'[|,;·•].*$', '', inst).strip()

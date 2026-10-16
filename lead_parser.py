@@ -8,6 +8,13 @@ ACADEMIC_OR_FLUFF = [
     r'^(estudiante|alumno|postulante)\b'
 ]
 
+EMPLOYMENT_TYPES = {
+    'jornada completa', 'jornada parcial', 'tiempo completo', 'medio tiempo',
+    'profesional independiente', 'autónomo', 'autónoma', 'contrato temporal',
+    'contrato de prácticas', 'contrato de formación', 'de temporada', 'en prácticas',
+    'full-time', 'part-time', 'self-employed', 'freelance', 'contract', 'internship', 'seasonal'
+}
+
 COMMON_TITLES_PREFIX = [
     r'^director[a]?\s+general\b',
     r'^director[a]?\s+ejecutiv[oa]\b',
@@ -68,7 +75,7 @@ def parse_cargo_and_institucion(headline: str, snippet_actual: str = "", default
     
     cargo_actual = ""
     institucion = (default_institucion or "").strip()
-    if institucion in ["Institución Escolar", "Chile"]:
+    if institucion.lower() in EMPLOYMENT_TYPES or institucion in ["Institución Escolar", "Chile", "Empresa u Organización"]:
         institucion = ""
 
     # 1. Prioridad: Snippet explícito de LinkedIn: "Actual: Director de Colegio en San Ignacio" o "Current: Managing Director at X"
@@ -173,6 +180,8 @@ def parse_cargo_and_institucion(headline: str, snippet_actual: str = "", default
 
     institucion = re.sub(r'[|,;·•].*$', '', institucion).strip()
     institucion = re.sub(r'[\/|;,\-–—]+$', '', institucion).strip()
+    if institucion and institucion.lower().strip() in EMPLOYMENT_TYPES:
+        institucion = ""
 
     return cargo_actual, institucion
 

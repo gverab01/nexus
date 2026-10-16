@@ -647,11 +647,32 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
     browser_service.open_url(clean_url)
     time.sleep(3.2)
 
-    # Activar lazy loading de la sección de Experiencia (IntersectionObserver en SDUI de LinkedIn)
-    scroll_script = """(() => {
+    # Activar lazy loading progresivo de la sección de Experiencia (IntersectionObserver en SDUI de LinkedIn)
+    scroll_stage1 = """(() => {
+        const ws = document.getElementById('workspace') || document.querySelector('main');
+        window.scrollTo(0, 1200);
+        if (ws) ws.scrollTop = 1200;
+        return true;
+    })()"""
+    browser_service._call_mcp_evaluate(scroll_stage1)
+    time.sleep(1.0)
+
+    scroll_stage2 = """(() => {
+        const ws = document.getElementById('workspace') || document.querySelector('main');
+        window.scrollTo(0, 2600);
+        if (ws) ws.scrollTop = 2600;
+        return true;
+    })()"""
+    browser_service._call_mcp_evaluate(scroll_stage2)
+    time.sleep(1.0)
+
+    scroll_stage3 = """(() => {
+        const ws = document.getElementById('workspace') || document.querySelector('main');
+        window.scrollTo(0, 4200);
+        if (ws) ws.scrollTop = 4200;
+
+        // Si ya está experiencia presente, centrarla directamente
         const sections = Array.from(document.querySelectorAll('section'));
-        
-        // 1. Si ya existe la sección de Experiencia con título, scrollear directamente a ella
         for (const s of sections) {
             const h2 = s.querySelector('h2');
             const h2Text = h2 ? (h2.innerText || '').toLowerCase() : '';
@@ -660,31 +681,10 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
                 return 'found_exp_h2';
             }
         }
-
-        // 2. Si no, buscar los contenedores vacíos / skeletons que LinkedIn aún no hidrata (text === '' y children > 0)
-        // OJO: Nunca detenerse en secciones que ya tengan texto (como el encabezado de perfil)
-        for (const s of sections) {
-            const text = (s.innerText || '').trim();
-            if (text === '' && s.children.length > 0) {
-                s.scrollIntoView({ behavior: 'auto', block: 'center' });
-                return 'found_empty_skeleton';
-            }
-        }
-
-        const expAnchor = document.getElementById('experience');
-        if (expAnchor) {
-            expAnchor.scrollIntoView({ behavior: 'auto', block: 'center' });
-            return 'found_anchor';
-        }
-
-        // 3. Fallback: Desplazar la ventana y el contenedor principal a la zona de experiencia (2000-2400px)
-        window.scrollTo(0, 2200);
-        const ws = document.getElementById('workspace') || document.querySelector('main');
-        if (ws) ws.scrollTop = 2200;
-        return 'fallback_scroll';
+        return 'scrolled_stage3';
     })()"""
-    browser_service._call_mcp_evaluate(scroll_script)
-    time.sleep(2.8)
+    browser_service._call_mcp_evaluate(scroll_stage3)
+    time.sleep(2.0)
 
     script = r"""
     (() => {
@@ -704,12 +704,39 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
                 };
             }
 
-            // 1. Extraer Nombre real del perfil
+            const sections = Array.from(document.querySelectorAll('section'));
+
+            // 1. Tarjeta principal de presentación (Intro Card)
+            const introSec = sections.find(s => {
+                const text = (s.innerText || '').trim();
+                return text.includes('Información de contacto') || text.includes('contact info') || text.includes('contactos') || text.includes('connections');
+            }) || sections[1] || sections[0];
+
             let name = '';
-            if (pageTitle.includes('|')) {
-                name = pageTitle.split('|')[0].trim();
-            } else if (pageTitle.includes('-')) {
-                name = pageTitle.split('-')[0].trim();
+            let headline = '';
+            let location = 'Chile';
+
+            if (pageTitle.includes('|')) name = pageTitle.split('|')[0].trim();
+            else if (pageTitle.includes('-')) name = pageTitle.split('-')[0].trim();
+
+            if (introSec) {
+                const h2 = introSec.querySelector('h2') || introSec.querySelector('h1');
+                if (h2 && (!name || name === 'LinkedIn')) name = h2.innerText.trim();
+
+                const lines = introSec.innerText.split('\n').map(l => l.trim()).filter(Boolean);
+                const degreeRegex = /^(·|•)?\s*(1er|2º|2do|3er|3º|\d+º|\d+°|\d+st|\d+nd|\d+rd|\d+th)\b/i;
+
+                for (let i = 1; i < lines.length; i++) {
+                    const l = lines[i];
+                    if (degreeRegex.test(l) || l === '·' || l === '•') continue;
+                    if (l === 'Información de contacto' || l.includes('contactos') || l.includes('común')) break;
+                    if (!headline) {
+                        headline = l;
+                    } else if (location === 'Chile' && (l.includes('Chile') || l.includes('Santiago') || l.includes('Región') || l.includes('Valparaíso') || l.includes('Concepción'))) {
+                        location = l.replace(/[·•|;].*$/, '').trim();
+                        break;
+                    }
+                }
             }
 
             if (!name || name === 'LinkedIn' || name.toLowerCase().includes('esta página no existe')) {
@@ -813,8 +840,7 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
             }
 
             // Fallback directo a la sección con h2 'Experiencia' si dateElement no resolvió
-            if (!expRole) {
-                const sections = Array.from(document.querySelectorAll('section'));
+            if (!expRole || !expCompany) {
                 const expSec = sections.find(s => {
                     const h2 = s.querySelector('h2');
                     return h2 && (h2.innerText || '').toLowerCase().includes('experiencia');
@@ -825,67 +851,49 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
                     const expTitleIdx = sLines.findIndex(l => l.toLowerCase() === 'experiencia' || l.toLowerCase() === 'experience');
                     const relevantLines = expTitleIdx !== -1 ? sLines.slice(expTitleIdx + 1) : sLines;
                     if (relevantLines.length >= 2) {
-                        expRole = cleanRole(relevantLines[0]);
-                        if (!isEmploymentType(relevantLines[1])) {
+                        if (!expRole) expRole = cleanRole(relevantLines[0]);
+                        if (!expCompany && !isEmploymentType(relevantLines[1])) {
                             expCompany = relevantLines[1].replace(/[·•|;].*$/, '').trim();
                         }
                     }
                 }
             }
 
-            // 3. Extraer textos relevantes del perfil para Headline y Ubicación
-            const allElements = Array.from(document.querySelectorAll('main h1, main h2, main h3, main p, main span, main a, div[data-sdui-screen] p, div[data-sdui-screen] span'))
-                .filter(el => el.children.length === 0 && (el.innerText || '').trim().length > 0)
-                .map(el => el.innerText.trim());
+            // 3. Fallbacks de Headline y Ubicación si no se extrajeron de la tarjeta intro
+            if (!headline || !location) {
+                const allElements = Array.from(document.querySelectorAll('main h1, main h2, main h3, main p, main span, main a, div[data-sdui-screen] p, div[data-sdui-screen] span'))
+                    .filter(el => el.children.length === 0 && (el.innerText || '').trim().length > 0)
+                    .map(el => el.innerText.trim());
 
-            const isExcluded = (t) => {
-                if (!t) return true;
-                if (t === name) return true;
-                if (t.startsWith('·') || t.startsWith('•')) return true;
-                if (t.includes('contacto') || t.includes('seguidor') || t.includes('más en común')) return true;
-                if (isEmploymentType(t)) return true;
-                if (['Información de contacto', 'Enviar mensaje', 'Enviar', 'Más', 'Seguir', 'Conectar', 'Guardar', 'Recomendar'].includes(t)) return true;
-                return false;
-            };
+                const isExcluded = (t) => {
+                    if (!t) return true;
+                    if (t === name) return true;
+                    if (t.startsWith('·') || t.startsWith('•')) return true;
+                    if (t.includes('contacto') || t.includes('seguidor') || t.includes('más en común')) return true;
+                    if (isEmploymentType(t)) return true;
+                    if (['Información de contacto', 'Enviar mensaje', 'Enviar', 'Más', 'Seguir', 'Conectar', 'Guardar', 'Recomendar'].includes(t)) return true;
+                    return false;
+                };
 
-            const cleanItems = allElements.filter(t => !isExcluded(t));
+                const cleanItems = allElements.filter(t => !isExcluded(t));
 
-            // Titular / Headline
-            let headline = '';
-            for (const t of cleanItems) {
-                if (t.length >= 10 && t.length <= 250 && t !== expRole && t !== expCompany) {
-                    headline = t;
-                    break;
-                }
-            }
-
-            // Ubicación
-            let location = 'Chile';
-            for (const t of cleanItems) {
-                if (t === headline || t === name || t === expRole || t === expCompany) continue;
-                if ((t === 'Chile' || t.startsWith('Chile') || t.includes('Santiago') || t.includes('Región') || t.includes('Valparaíso') || t.includes('Concepción') || t.includes('Antofagasta')) && t.length < 80) {
-                    location = t.replace(/[·•|;].*$/, '').trim();
-                    break;
-                }
-            }
-
-            // Empresa alternativa por keywords si no se encontró en experiencia
-            let company = expCompany;
-            if (!company) {
-                const orgKeywords = ['colegio', 'liceo', 'escuela', 'universidad', 'instituto', 'fundación', 'holding', 'spa', 'ltda', 'foods', 'group', 'grupo', 'consulting', 'solutions', 'tech'];
-                for (const t of cleanItems) {
-                    if (t === headline || t === location || t === name || t === expRole || isEmploymentType(t)) continue;
-                    if (orgKeywords.some(k => t.toLowerCase().includes(k)) && t.length < 70) {
-                        company = t.replace(/[·•|;].*$/, '').trim();
-                        break;
+                if (!headline) {
+                    for (const t of cleanItems) {
+                        if (t.length >= 3 && t.length <= 250 && t !== expRole && t !== expCompany) {
+                            headline = t;
+                            break;
+                        }
                     }
                 }
-            }
 
-            if (!company && headline) {
-                const matchEn = headline.match(/\s+(?:en|at|@)\s+([^|;•·\n\–\—]+)/i);
-                if (matchEn && matchEn[1]) {
-                    company = matchEn[1].replace(/[·•|;].*$/, '').trim();
+                if (location === 'Chile') {
+                    for (const t of cleanItems) {
+                        if (t === headline || t === name || t === expRole || t === expCompany) continue;
+                        if ((t === 'Chile' || t.startsWith('Chile') || t.includes('Santiago') || t.includes('Región') || t.includes('Valparaíso') || t.includes('Concepción') || t.includes('Antofagasta')) && t.length < 80) {
+                            location = t.replace(/[·•|;].*$/, '').trim();
+                            break;
+                        }
+                    }
                 }
             }
 
@@ -895,7 +903,6 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
                 headline: headline,
                 expRole: expRole,
                 expCompany: expCompany,
-                company: company,
                 location: location,
                 url: url
             };

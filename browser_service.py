@@ -152,13 +152,24 @@ def open_url(url: str) -> dict:
     """
     if is_electron_running():
         try:
+            status = get_electron_status()
+            current_url = status.get("url", "").split("?")[0].rstrip("/")
+            target_clean = url.split("?")[0].rstrip("/")
+            if current_url and current_url == target_clean:
+                return {
+                    "status": "ok",
+                    "metodo": "electron_isolated_current",
+                    "mensaje": f"Pestaña ya posicionada en: {url}",
+                    "url": url
+                }
+
             req = urllib.request.Request(
                 f"{ELECTRON_BASE_URL}/navigate",
                 data=json.dumps({"url": url}).encode("utf-8"),
                 headers={"Content-Type": "application/json"},
                 method="POST"
             )
-            with urllib.request.urlopen(req, timeout=12.0) as res:
+            with urllib.request.urlopen(req, timeout=18.0) as res:
                 return {
                     "status": "ok",
                     "metodo": "electron_isolated",
@@ -308,13 +319,19 @@ def open_profile_in_browseros(profile_url: str, name: str = "") -> dict:
     # 1. Primary: Electron Embedded Chromium
     if is_electron_running():
         try:
+            status = get_electron_status()
+            current_url = status.get("url", "").split("?")[0].rstrip("/")
+            target_clean = profile_url.split("?")[0].rstrip("/")
+            if current_url and current_url == target_clean:
+                return {"status": "ok", "tipo": "electron_isolated_current", "url": profile_url}
+
             req = urllib.request.Request(
                 f"{ELECTRON_BASE_URL}/navigate",
                 data=json.dumps({"url": profile_url}).encode("utf-8"),
                 headers={"Content-Type": "application/json"},
                 method="POST"
             )
-            with urllib.request.urlopen(req, timeout=15.0) as res:
+            with urllib.request.urlopen(req, timeout=18.0) as res:
                 data = json.loads(res.read().decode("utf-8"))
                 if data.get("ok"):
                     return {"status": "ok", "tipo": "electron_isolated", "url": profile_url}

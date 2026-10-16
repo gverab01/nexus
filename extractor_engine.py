@@ -650,29 +650,41 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
     # Activar lazy loading de la sección de Experiencia (IntersectionObserver en SDUI de LinkedIn)
     scroll_script = """(() => {
         const sections = Array.from(document.querySelectorAll('section'));
+        
+        // 1. Si ya existe la sección de Experiencia con título, scrollear directamente a ella
         for (const s of sections) {
             const h2 = s.querySelector('h2');
             const h2Text = h2 ? (h2.innerText || '').toLowerCase() : '';
             if (h2Text.includes('experiencia') || h2Text.includes('experience')) {
                 s.scrollIntoView({ behavior: 'auto', block: 'center' });
-                return true;
-            }
-            if (s.querySelector('div[style*="width: 18rem"]') || (s.innerText.trim() === '' && s.children.length > 0)) {
-                s.scrollIntoView({ behavior: 'auto', block: 'center' });
-                return true;
+                return 'found_exp_h2';
             }
         }
+
+        // 2. Si no, buscar los contenedores vacíos / skeletons que LinkedIn aún no hidrata (text === '' y children > 0)
+        // OJO: Nunca detenerse en secciones que ya tengan texto (como el encabezado de perfil)
+        for (const s of sections) {
+            const text = (s.innerText || '').trim();
+            if (text === '' && s.children.length > 0) {
+                s.scrollIntoView({ behavior: 'auto', block: 'center' });
+                return 'found_empty_skeleton';
+            }
+        }
+
         const expAnchor = document.getElementById('experience');
         if (expAnchor) {
             expAnchor.scrollIntoView({ behavior: 'auto', block: 'center' });
-            return true;
+            return 'found_anchor';
         }
+
+        // 3. Fallback: Desplazar la ventana y el contenedor principal a la zona de experiencia (2000-2400px)
+        window.scrollTo(0, 2200);
         const ws = document.getElementById('workspace') || document.querySelector('main');
-        if (ws) ws.scrollTop = 1800;
-        return true;
+        if (ws) ws.scrollTop = 2200;
+        return 'fallback_scroll';
     })()"""
     browser_service._call_mcp_evaluate(scroll_script)
-    time.sleep(2.5)
+    time.sleep(2.8)
 
     script = r"""
     (() => {
@@ -733,6 +745,31 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
                        !clean.includes('actualidad') && !clean.includes('present');
             };
 
+            const cleanRole = (role) => {
+                if (!role) return '';
+                const parts = role.split(/\s*(?:[|;•·]|\s-\s)\s*/).map(p => p.trim()).filter(Boolean);
+                if (parts.length <= 1) return role.trim();
+                
+                const pitchKeywords = [
+                    'factura', 'ayudo', 'ayudamos', 'cliente', 'metodo', 'método', 'dolar', 'dólar', 
+                    'escala', 'crece', 'impacto', 'negocio', 'asesor', 'transforma', 'helping', 'scale', 
+                    'revenue', 'k/mes', 'mes con', 'usd'
+                ];
+                
+                const cleaned = [];
+                for (let i = 0; i < parts.length; i++) {
+                    const p = parts[i];
+                    const pLower = p.toLowerCase();
+                    const isPitch = p.length > 30 || pitchKeywords.some(k => pLower.includes(k));
+                    if (i === 0) {
+                        cleaned.push(p);
+                    } else if (!isPitch) {
+                        cleaned.push(p);
+                    }
+                }
+                return cleaned.join(' | ');
+            };
+
             const allNodes = Array.from(document.querySelectorAll('*'));
             const dateElement = allNodes.find(el => {
                 if (el.children.length !== 0) return false;
@@ -750,7 +787,7 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
                     const lines = jobContainer.innerText.split('\n').map(l => l.trim()).filter(Boolean);
                     const dateIdx = lines.findIndex(l => l.toLowerCase().includes('actualidad') || l.toLowerCase().includes('present') || l.toLowerCase().includes('presente'));
                     
-                    expRole = lines[0];
+                    expRole = cleanRole(lines[0]);
 
                     if (dateIdx >= 2 && !isEmploymentType(lines[1])) {
                         expCompany = lines[1].replace(/[·•|;].*$/, '').trim();
@@ -763,13 +800,34 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
                         let curr = jobContainer.parentElement;
                         while (curr && curr.tagName !== 'SECTION' && curr.tagName !== 'MAIN') {
                             const pLines = curr.innerText.split('\n').map(l => l.trim()).filter(Boolean);
-                            if (pLines.length >= 2 && pLines[0] !== expRole && pLines[0] !== 'Experiencia' && !isEmploymentType(pLines[0])) {
-                                if (isDuration(pLines[1]) || pLines[1] === expRole || isEmploymentType(pLines[1])) {
+                            if (pLines.length >= 2 && pLines[0] !== lines[0] && pLines[0] !== 'Experiencia' && !isEmploymentType(pLines[0])) {
+                                if (isDuration(pLines[1]) || pLines[1] === lines[0] || isEmploymentType(pLines[1])) {
                                     expCompany = pLines[0].replace(/[·•|;].*$/, '').trim();
                                     break;
                                 }
                             }
                             curr = curr.parentElement;
+                        }
+                    }
+                }
+            }
+
+            // Fallback directo a la sección con h2 'Experiencia' si dateElement no resolvió
+            if (!expRole) {
+                const sections = Array.from(document.querySelectorAll('section'));
+                const expSec = sections.find(s => {
+                    const h2 = s.querySelector('h2');
+                    return h2 && (h2.innerText || '').toLowerCase().includes('experiencia');
+                }) || document.getElementById('experience')?.closest('section');
+                
+                if (expSec) {
+                    const sLines = expSec.innerText.split('\n').map(l => l.trim()).filter(Boolean);
+                    const expTitleIdx = sLines.findIndex(l => l.toLowerCase() === 'experiencia' || l.toLowerCase() === 'experience');
+                    const relevantLines = expTitleIdx !== -1 ? sLines.slice(expTitleIdx + 1) : sLines;
+                    if (relevantLines.length >= 2) {
+                        expRole = cleanRole(relevantLines[0]);
+                        if (!isEmploymentType(relevantLines[1])) {
+                            expCompany = relevantLines[1].replace(/[·•|;].*$/, '').trim();
                         }
                     }
                 }

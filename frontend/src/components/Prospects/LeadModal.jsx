@@ -90,10 +90,11 @@ export default function LeadModal({ prospect, onClose, onUpdated }) {
           cargo_titular: updated.cargo_titular || prev.cargo_titular,
           cargo: updated.cargo_actual || updated.cargo_titular || prev.cargo,
           institucion: updated.institucion_actual || prev.institucion,
+          institucion_actual: updated.institucion_actual || prev.institucion_actual,
           ubicacion: updated.ubicacion || prev.ubicacion,
         }));
         setSyncMessage({ type: 'success', text: res.mensaje || 'Perfil sincronizado en vivo exitosamente desde LinkedIn.' });
-        if (onUpdated) onUpdated();
+        if (onUpdated) onUpdated(updated);
       }
     } catch (err) {
       setSyncMessage({ type: 'error', text: err.message || 'Error sincronizando con LinkedIn' });
@@ -112,7 +113,13 @@ export default function LeadModal({ prospect, onClose, onUpdated }) {
       });
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 2000);
-      if (onUpdated) onUpdated();
+      if (onUpdated) onUpdated({
+        ...leadData,
+        email: emailInput,
+        email_directo: emailInput,
+        telefono: phoneInput,
+        telefono_directo: phoneInput,
+      });
     } catch (err) {
       alert(`Error guardando datos de contacto: ${err.message}`);
     } finally {
@@ -130,7 +137,7 @@ export default function LeadModal({ prospect, onClose, onUpdated }) {
     try {
       setIsDeleting(true);
       await deleteProspect(leadData.id);
-      if (onUpdated) onUpdated();
+      if (onUpdated) onUpdated({ id: leadData.id, _deleted: true });
       onClose();
     } catch (err) {
       alert(`Error eliminando prospecto: ${err.message}`);
@@ -148,14 +155,15 @@ export default function LeadModal({ prospect, onClose, onUpdated }) {
         valor_reunion: meetingValue ? parseFloat(meetingValue) : undefined,
       });
       if (res?.exito) {
-        setLeadData((prev) => ({
-          ...prev,
+        const meetingLead = {
+          ...leadData,
           estado: 'REUNION_AGENDADA',
           fecha_reunion_agendada: meetingDate,
           valor_reunion: res.valor_reunion || 0,
-        }));
+        };
+        setLeadData(meetingLead);
         setIsBookingMeeting(false);
-        if (onUpdated) onUpdated();
+        if (onUpdated) onUpdated(meetingLead);
       }
     } catch (err) {
       alert(`Error registrando reunión: ${err.message}`);

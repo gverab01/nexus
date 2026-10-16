@@ -95,18 +95,89 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
   const [selectedDirectoryIds, setSelectedDirectoryIds] = useState(new Set());
   const [isDeletingBatch, setIsDeletingBatch] = useState(false);
   const [syncingLeadIds, setSyncingLeadIds] = useState(new Set());
+  const [recentlySyncedIds, setRecentlySyncedIds] = useState(new Set());
 
   // Modal de detalle
   const [selectedProspect, setSelectedProspect] = useState(null);
 
   useEffect(() => {
-    loadData();
+    loadData(true);
     loadLists();
   }, [activeFilter, activeTenantWorkspace]);
 
-  async function loadData() {
+  function handleProspectUpdated(updatedLead) {
+    if (!updatedLead?.id) {
+      loadData(false);
+      return;
+    }
+
+    if (updatedLead._deleted) {
+      setProspects((prev) => prev.filter((p) => p.id !== updatedLead.id));
+      setSelectedDirectoryIds((prev) => {
+        const next = new Set(prev);
+        next.delete(updatedLead.id);
+        return next;
+      });
+      loadData(false);
+      return;
+    }
+
+    const normalized = {
+      id: updatedLead.id,
+      nombre: updatedLead.nombre,
+      cargo_actual: updatedLead.cargo_actual || updatedLead.cargo || updatedLead.cargo_titular || 'Profesional / Decisor',
+      cargo_titular: updatedLead.cargo_titular || updatedLead.cargo || '',
+      cargo: updatedLead.cargo_actual || updatedLead.cargo_titular || updatedLead.cargo || 'Profesional / Decisor',
+      institucion: updatedLead.institucion_actual || updatedLead.institucion || 'Organización no declarada',
+      institucion_actual: updatedLead.institucion_actual || updatedLead.institucion,
+      ubicacion: updatedLead.ubicacion || 'Chile',
+      url_perfil: updatedLead.perfil_url || updatedLead.url_perfil,
+      grado_red: updatedLead.grado_red || '2°/3°',
+      estado: updatedLead.estado || 'EXTRAIDO',
+      email_directo: updatedLead.email || updatedLead.email_directo,
+      telefono_directo: updatedLead.telefono || updatedLead.telefono_directo,
+      fecha_extraccion: updatedLead.fecha_extraccion || updatedLead.created_at,
+      fecha_invitacion: updatedLead.fecha_invitacion,
+      fecha_conexion: updatedLead.fecha_conexion,
+      etiquetas: Array.isArray(updatedLead.tags) ? updatedLead.tags : (updatedLead.etiquetas || []),
+      historial_interacciones: updatedLead.historial || updatedLead.historial_interacciones || [],
+    };
+
+    // Actualización quirúrgica en el array local sin tocar el DOM de las demás filas
+    // ni resetear el scroll o disparar pantalla de carga
+    setProspects((prev) =>
+      prev.map((p) => (p.id === normalized.id ? { ...p, ...normalized } : p))
+    );
+
+    // Mantener sincronizado el prospecto en el modal de detalle si está abierto
+    setSelectedProspect((prev) => (prev && prev.id === normalized.id ? { ...prev, ...normalized } : prev));
+
+    // Efecto sutil de éxito para identificar visualmente la fila actualizada
+    setRecentlySyncedIds((prev) => new Set(prev).add(normalized.id));
+    setTimeout(() => {
+      setRecentlySyncedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(normalized.id);
+        return next;
+      });
+    }, 2500);
+
+    // Refrescar métricas en segundo plano silenciosamente
+    fetchMetrics(activeTenantWorkspace).then((metricsData) => {
+      setMetrics({
+        hoy: metricsData.invitaciones_hoy || 0,
+        cola: metricsData.en_cola || 0,
+        enviadas: metricsData.invitaciones_enviadas || 0,
+        conectados: metricsData.conectados || 0,
+      });
+    }).catch(() => {});
+  }
+
+  async function loadData(showLoading = false) {
     try {
-      setLoading(true);
+      if (showLoading) {
+        setLoading(true);
+      }
       const [prospectsData, metricsData] = await Promise.all([
         fetchProspects(activeFilter, searchQuery, activeTenantWorkspace),
         fetchMetrics(activeTenantWorkspace).catch(() => ({})),
@@ -121,7 +192,9 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
     } catch (err) {
       console.error('Error cargando prospectos:', err);
     } finally {
-      setLoading(false);
+      if (showLoading) {
+        setLoading(false);
+      }
     }
   }
 
@@ -253,12 +326,7 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
 
     try {
       await deleteProspect(prospect.id);
-      setSelectedDirectoryIds(prev => {
-        const next = new Set(prev);
-        next.delete(prospect.id);
-        return next;
-      });
-      loadData();
+      handleProspectUpdated({ id: prospect.id, _deleted: true });
       loadLists();
     } catch (err) {
       alert(`Error eliminando prospecto: ${err.message}`);
@@ -270,8 +338,12 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
     if (!prospect?.id) return;
     try {
       setSyncingLeadIds((prev) => new Set(prev).add(prospect.id));
-      await syncLeadWithLinkedIn(prospect.id);
-      await loadData();
+      const res = await syncLeadWithLinkedIn(prospect.id);
+      if (res && res.lead) {
+        handleProspectUpdated(res.lead);
+      } else {
+        await loadData(false);
+      }
     } catch (err) {
       alert(`Error al sincronizar con LinkedIn: ${err.message}`);
     } finally {
@@ -758,13 +830,18 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
                   }[prospect.estado] || 'bg-white/[0.04] text-zinc-400 border-white/[0.08]';
 
                   const isSelected = selectedDirectoryIds.has(prospect.id);
+                  const isRecentlySynced = recentlySyncedIds.has(prospect.id);
 
                   return (
                     <tr 
                       key={prospect.id}
                       onClick={() => setSelectedProspect(prospect)}
-                      className={`transition cursor-pointer group ${
-                        isSelected ? 'bg-white/[0.04]' : 'hover:bg-white/[0.02]'
+                      className={`transition-colors duration-500 cursor-pointer group ${
+                        isRecentlySynced
+                          ? 'bg-emerald-500/15'
+                          : isSelected 
+                          ? 'bg-white/[0.04]' 
+                          : 'hover:bg-white/[0.02]'
                       }`}
                     >
                       <td className="py-3 px-4 w-10" onClick={(e) => e.stopPropagation()}>
@@ -868,7 +945,7 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
         <LeadModal
           prospect={selectedProspect}
           onClose={() => setSelectedProspect(null)}
-          onUpdated={loadData}
+          onUpdated={handleProspectUpdated}
         />
       )}
     </div>

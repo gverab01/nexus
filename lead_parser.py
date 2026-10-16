@@ -20,6 +20,9 @@ COMMON_TITLES_PREFIX = [
     r'^director[a]?\s+de\s+colegio\b',
     r'^director[a]?\s+escolar\b',
     r'^director[a]?\b',
+    r'^subdirector[a]?\b',
+    r'^inspector[a]?\s+general\b',
+    r'^inspector[a]?\b',
     r'^gerente\s+general\b',
     r'^gerente\s+de\s+operaciones\b',
     r'^gerente\b',
@@ -90,8 +93,8 @@ def parse_cargo_and_institucion(headline: str, snippet_actual: str = "", default
         # Limpiar emojis o caracteres decorativos iniciales
         clean_head = re.sub(r'^[^\w\s]+', '', headline).strip()
 
-        # Segmentar por separadores habituales de LinkedIn: | , ; • – — y ' - '
-        segments = [s.strip() for s in re.split(r'\s*(?:[|;•\n\–\—]|\s-\s)\s*', clean_head) if s.strip()]
+        # Segmentar por separadores habituales de LinkedIn: | , ; • · – — y ' - '
+        segments = [s.strip() for s in re.split(r'\s*(?:[|;•·\n\–\—]|\s-\s)\s*', clean_head) if s.strip()]
 
         # Si no hay barras pero hay '/' con roles (ej: Director de Colegio/ Líder Educativo Senior)
         if len(segments) <= 1 and '/' in clean_head:

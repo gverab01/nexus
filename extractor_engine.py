@@ -645,7 +645,12 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
 
     clean_url = re.sub(r'/+$', '', profile_url.split("?")[0].strip()) + "/"
     browser_service.open_url(clean_url)
-    time.sleep(3.5)
+    time.sleep(3.2)
+
+    # Scroll para cargar la sección de Experiencia (lazy loading en SDUI)
+    scroll_script = "(() => { const ws = document.getElementById('workspace') || document.querySelector('main'); if (ws) ws.scrollTop = 1200; return true; })()"
+    browser_service._call_mcp_evaluate(scroll_script)
+    time.sleep(1.8)
 
     script = r"""
     (() => {
@@ -678,12 +683,39 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
                 if (h2) name = h2.innerText.trim();
             }
 
-            // Si el nombre sigue conteniendo 404, abortar
             if (name.toLowerCase().includes('esta página no existe')) {
                 return { ok: false, error: 'Página no encontrada en LinkedIn (404)' };
             }
 
-            // 2. Extraer textos relevantes del perfil
+            // 2. Extraer Cargo Actual y Empresa desde la sección de EXPERIENCIA laboral en vivo
+            let expRole = '';
+            let expCompany = '';
+            const allNodes = Array.from(document.querySelectorAll('*'));
+            const dateElement = allNodes.find(el => {
+                if (el.children.length !== 0) return false;
+                const t = (el.innerText || '').toLowerCase().trim();
+                return (t.includes('actualidad') || t.includes(' - present') || t.includes('presente')) && 
+                       (t.includes('año') || t.includes('mes') || t.includes('year') || t.includes('month') || t.includes('20'));
+            });
+
+            if (dateElement) {
+                let jobContainer = dateElement.parentElement;
+                while (jobContainer && !jobContainer.innerText.includes('\n') && jobContainer.parentElement) {
+                    jobContainer = jobContainer.parentElement;
+                }
+                if (jobContainer) {
+                    const lines = jobContainer.innerText.split('\n').map(l => l.trim()).filter(Boolean);
+                    const dateIdx = lines.findIndex(l => l.toLowerCase().includes('actualidad') || l.toLowerCase().includes('present') || l.toLowerCase().includes('presente'));
+                    if (dateIdx === 1) {
+                        expRole = lines[0];
+                    } else if (dateIdx >= 2) {
+                        expRole = lines[0];
+                        expCompany = lines[1].replace(/·.*$/, '').trim();
+                    }
+                }
+            }
+
+            // 3. Extraer textos relevantes del perfil para Headline y Ubicación
             const allElements = Array.from(document.querySelectorAll('main h1, main h2, main h3, main p, main span, main a, div[data-sdui-screen] p, div[data-sdui-screen] span'))
                 .filter(el => el.children.length === 0 && (el.innerText || '').trim().length > 0)
                 .map(el => el.innerText.trim());
@@ -699,16 +731,16 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
 
             const cleanItems = allElements.filter(t => !isExcluded(t));
 
-            // 3. Titular / Headline
+            // Titular / Headline
             let headline = '';
             for (const t of cleanItems) {
-                if (t.length >= 10 && t.length <= 250) {
+                if (t.length >= 10 && t.length <= 250 && t !== expRole && t !== expCompany) {
                     headline = t;
                     break;
                 }
             }
 
-            // 4. Ubicación
+            // Ubicación
             let location = 'Chile';
             for (const t of cleanItems) {
                 if ((t.includes('Chile') || t.includes('Santiago') || t.includes('Región') || t.includes('Valparaíso') || t.includes('Concepción') || t.includes('Antofagasta')) && t.length < 80) {
@@ -717,21 +749,21 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
                 }
             }
 
-            // 5. Empresa u Organización actual
-            let company = '';
-            // Buscar palabras clave institucionales o corporativas en el perfil
-            const orgKeywords = ['colegio', 'liceo', 'escuela', 'universidad', 'instituto', 'fundación', 'holding', 'spa', 'ltda', 'foods', 'group', 'consulting', 'solutions', 'tech'];
-            for (const t of cleanItems) {
-                if (t === headline || t === location || t === name) continue;
-                if (orgKeywords.some(k => t.toLowerCase().includes(k)) && t.length < 70) {
-                    company = t;
-                    break;
+            // Empresa alternativa por keywords si no se encontró en experiencia
+            let company = expCompany;
+            if (!company) {
+                const orgKeywords = ['colegio', 'liceo', 'escuela', 'universidad', 'instituto', 'fundación', 'holding', 'spa', 'ltda', 'foods', 'group', 'consulting', 'solutions', 'tech'];
+                for (const t of cleanItems) {
+                    if (t === headline || t === location || t === name || t === expRole) continue;
+                    if (orgKeywords.some(k => t.toLowerCase().includes(k)) && t.length < 70) {
+                        company = t;
+                        break;
+                    }
                 }
             }
 
-            // Si no se encontró por palabras clave pero el titular tiene " en " o " at "
             if (!company && headline) {
-                const matchEn = headline.match(/\s+(?:en|at|@)\s+([^|;•\n\–\—]+)/i);
+                const matchEn = headline.match(/\s+(?:en|at|@)\s+([^|;•·\n\–\—]+)/i);
                 if (matchEn && matchEn[1]) {
                     company = matchEn[1].trim();
                 }
@@ -741,6 +773,8 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
                 ok: true,
                 nombre: name,
                 headline: headline,
+                expRole: expRole,
+                expCompany: expCompany,
                 company: company,
                 location: location,
                 url: url
@@ -761,15 +795,23 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
         if "esta página no existe" in nombre.lower():
             return {"ok": False, "error": "Página no encontrada en LinkedIn (404)"}
 
+        exp_role = res_data.get("expRole", "")
+        exp_company = res_data.get("expCompany", "")
         headline = res_data.get("headline", "")
-        company = res_data.get("company", "")
-        c_act, inst = parse_cargo_and_institucion(headline, default_institucion=company)
+        company = exp_company or res_data.get("company", "")
+
+        if exp_role:
+            c_act = exp_role
+            inst = exp_company or company
+        else:
+            c_act, inst = parse_cargo_and_institucion(headline, default_institucion=company)
+
         return {
             "ok": True,
             "nombre": nombre,
             "cargo_titular": headline,
             "cargo_actual": c_act,
-            "institucion_actual": inst or company or "Empresa u Organización",
+            "institucion_actual": inst or "Empresa u Organización",
             "ubicacion": res_data.get("location") or "Chile"
         }
     return {"ok": False, "error": res.get("error", "No se pudo leer el DOM del perfil") if isinstance(res, dict) else str(res)}

@@ -539,6 +539,252 @@ async function handleLinkedInExtractNetwork(win, params = {}) {
 }
 
 /**
+ * 4.2 LI_SEARCH_PEOPLE: Búsqueda y extracción precompilada de personas en LinkedIn
+ */
+async function handleLinkedInSearchPeople(win, params = {}) {
+  if (!win || win.isDestroyed()) {
+    return { success: false, error: 'Ventana de LinkedIn no disponible' };
+  }
+  const term = (params.term || params.termino || '').trim();
+  const page = Math.max(1, parseInt(params.page || params.pagina || 1, 10));
+
+  if (!term) {
+    return { success: false, error: 'Término de búsqueda no especificado' };
+  }
+
+  const encodedTerm = encodeURIComponent(term);
+  const targetUrl = `https://www.linkedin.com/search/results/people/?keywords=${encodedTerm}&origin=SWITCH_SEARCH_VERTICAL${page > 1 ? `&page=${page}` : ''}`;
+
+  try {
+    // Navegar a la URL de búsqueda
+    await new Promise((resolve) => {
+      const timeout = setTimeout(resolve, 15000);
+      win.webContents.once('did-finish-load', () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+      win.loadURL(targetUrl).catch(resolve);
+    });
+
+    // Esperar renderizado reactivo inicial
+    await sleep(2500);
+
+    // Scroll progresivo suave para disparar hidratación de las tarjetas y lazy-loading
+    await win.webContents.executeJavaScript(`
+      (() => {
+        window.scrollBy({ top: 380, behavior: 'smooth' });
+        return true;
+      })()
+    `).catch(() => {});
+    await sleep(1500);
+
+    await win.webContents.executeJavaScript(`
+      (() => {
+        window.scrollBy({ top: 450, behavior: 'smooth' });
+        return true;
+      })()
+    `).catch(() => {});
+    await sleep(1200);
+
+    // Ejecutar extracción precompilada en el contexto del DOM de LinkedIn
+    const evalResult = await win.webContents.executeJavaScript(`
+      (() => {
+        try {
+          const seenUrls = new Set();
+          const leads = [];
+
+          // 1. Localizar lista o contenedores de tarjetas de personas (SDUI 2026 y clásico)
+          let cardElements = [];
+          const lists = Array.from(document.querySelectorAll('[role="list"]'));
+          const searchList = lists.find(l => l.children.length >= 3 && l.children.length <= 15);
+          if (searchList) {
+            cardElements = Array.from(searchList.children);
+          } else {
+            cardElements = Array.from(document.querySelectorAll(
+              '.reusable-search__result-container, .entity-result, [componentkey*="SearchResult"], div[data-view-name*="search-entity-result"]'
+            ));
+          }
+
+          const extractDegree = (t) => {
+            if (!t) return '2º';
+            if (/1er|1º|1°/i.test(t)) return '1º';
+            if (/2do|2º|2°/i.test(t)) return '2º';
+            if (/3er|3º|3°|\\+/i.test(t)) return '3º+';
+            return '2º';
+          };
+
+          const isDegreeBadge = (t) => {
+            if (!t) return false;
+            return /^[·•\\s]*(?:1er|1º|1°|2do|2º|2°|3er|3º|3°|\\d+[º°]|\\d+(?:er|do|to|st|nd|rd|th))\\+?[·•\\s]*$/i.test(t.trim());
+          };
+
+          // A) Si se encontraron tarjetas estructuradas
+          if (cardElements.length > 0) {
+            cardElements.forEach(card => {
+              try {
+                const text = (card.innerText || '').trim();
+                if (!text || text.length < 8) return;
+                const lines = text.split('\\n').map(l => l.trim()).filter(Boolean);
+
+                // Obtener enlace del candidato principal excluyendo enlaces de contactos en común
+                const allLinks = Array.from(card.querySelectorAll('a[href*="/in/"]'));
+                const primaryLink = allLinks.find(a => {
+                  const parentText = (a.closest('p') || a.parentElement || {}).innerText || '';
+                  return !parentText.includes('contacto') && !parentText.includes('común') && !parentText.includes('mutual');
+                }) || allLinks[0];
+
+                if (!primaryLink) return;
+
+                const rawHref = primaryLink.getAttribute('href') || primaryLink.href || '';
+                const cleanUrl = rawHref.split('?')[0].replace(/\\/+$/, '') + '/';
+                if (!cleanUrl.includes('/in/') || cleanUrl.endsWith('/in/')) return;
+                if (seenUrls.has(cleanUrl)) return;
+
+                let nombre = '';
+                let grado = '2º';
+                let titular = '';
+                let ubicacion = 'Chile';
+                let snippetActual = '';
+
+                // Intentar extraer con selectores semánticos de LinkedIn
+                const titleEl = card.querySelector('.entity-result__title-text a span[aria-hidden="true"], .entity-result__title-text a');
+                if (titleEl) {
+                  nombre = (titleEl.innerText || '').trim();
+                }
+
+                const badgeEl = card.querySelector('.entity-result__badge-text, .dist-value, [class*="badge-text"]');
+                if (badgeEl) {
+                  grado = extractDegree(badgeEl.innerText);
+                }
+
+                const subtitleEl = card.querySelector('.entity-result__primary-subtitle, [class*="primary-subtitle"]');
+                if (subtitleEl) {
+                  titular = (subtitleEl.innerText || '').trim();
+                }
+
+                const secSubtitleEl = card.querySelector('.entity-result__secondary-subtitle, [class*="secondary-subtitle"]');
+                if (secSubtitleEl) {
+                  ubicacion = (secSubtitleEl.innerText || '').trim();
+                }
+
+                const insightEl = card.querySelector('.entity-result__simple-insight, [class*="simple-insight"], [class*="insights"]');
+                if (insightEl) {
+                  snippetActual = (insightEl.innerText || '').trim();
+                }
+
+                // Fallback por análisis de líneas de texto de la tarjeta si faltan campos
+                if (!nombre && lines.length > 0) {
+                  const first = lines[0];
+                  const parts = first.split(/[•·]/);
+                  nombre = parts[0].trim();
+                  if (parts.length > 1 && !badgeEl) {
+                    grado = extractDegree(parts[1]);
+                  }
+                }
+
+                // Limpiar nombre de artefactos comunes
+                nombre = nombre.replace(/\\s*(Verificado|Premium|\\(He\\/Him\\)|\\(She\\/Her\\))\\s*/gi, ' ').trim();
+                if (!nombre || nombre.toLowerCase().includes('contacto') || nombre.toLowerCase().includes('linkedin')) return;
+
+                if (!snippetActual) {
+                  const snipLine = lines.find(l => /^(Actual|Current|Experiencia actual)\\s*:/i.test(l));
+                  if (snipLine) snippetActual = snipLine;
+                }
+
+                if (!titular) {
+                  for (let i = 1; i < lines.length; i++) {
+                    const l = lines[i];
+                    if (l === '·' || l === '•' || isDegreeBadge(l)) continue;
+                    if (l.includes('Conectar') || l.includes('Pendiente') || l.includes('Mensaje') || l.includes('Seguir') || l.includes('contacto en común')) continue;
+                    if (/^(Actual|Current|Pasado|Past|Experiencia actual)\\s*:/i.test(l)) continue;
+                    titular = l;
+                    break;
+                  }
+                }
+
+                // Extraer institución sugerida desde snippet o titular
+                let institucion = '';
+                const sourceText = snippetActual || titular;
+                if (sourceText.toLowerCase().includes(' en ')) {
+                  institucion = sourceText.split(/\\sen\\s/i)[1].split(/[;|\·•]/)[0].trim();
+                } else if (sourceText.toLowerCase().includes(' at ')) {
+                  institucion = sourceText.split(/\\sat\\s/i)[1].split(/[;|\·•]/)[0].trim();
+                }
+
+                seenUrls.add(cleanUrl);
+                leads.push({
+                  nombre: nombre,
+                  grado_red: grado,
+                  cargo_titular: titular || 'Profesional de LinkedIn',
+                  snippet_actual: snippetActual,
+                  institucion_actual: institucion,
+                  ubicacion: ubicacion || 'Chile',
+                  perfil_url: cleanUrl
+                });
+              } catch (e) {}
+            });
+          }
+
+          // B) Fallback: Si no hubo tarjetas estructuradas por cambios drásticos en el DOM
+          if (leads.length === 0) {
+            const allLinks = Array.from(document.querySelectorAll('main a[href*="/in/"], div.search-results-container a[href*="/in/"]'));
+            allLinks.forEach(a => {
+              try {
+                const rawHref = a.getAttribute('href') || a.href || '';
+                const cleanUrl = rawHref.split('?')[0].replace(/\\/+$/, '') + '/';
+                if (!cleanUrl.includes('/in/') || cleanUrl.endsWith('/in/')) return;
+                if (seenUrls.has(cleanUrl)) return;
+
+                const nameEl = a.querySelector('span[aria-hidden="true"]') || a;
+                let name = (nameEl.innerText || '').trim();
+                name = name.replace(/\\s*(Verificado|Premium|\\(He\\/Him\\)|\\(She\\/Her\\))\\s*/gi, ' ').trim();
+                if (!name || name.length < 2 || name.toLowerCase().includes('contacto') || name.toLowerCase().includes('linkedin')) return;
+
+                const parent = a.closest('li') || a.parentElement;
+                const text = parent ? (parent.innerText || '') : '';
+                const lines = text.split('\\n').map(l => l.trim()).filter(Boolean);
+
+                let titular = lines.find(l => l !== name && !l.toLowerCase().includes('conectar') && !l.toLowerCase().includes('mensaje') && !isDegreeBadge(l)) || 'Profesional de LinkedIn';
+
+                seenUrls.add(cleanUrl);
+                leads.push({
+                  nombre: name,
+                  grado_red: '2º',
+                  cargo_titular: titular,
+                  snippet_actual: '',
+                  institucion_actual: '',
+                  ubicacion: 'Chile',
+                  perfil_url: cleanUrl
+                });
+              } catch (e) {}
+            });
+          }
+
+          return { success: true, total: leads.length, leads: leads };
+        } catch (err) {
+          return { success: false, total: 0, leads: [], error: err.message };
+        }
+      })()
+    `);
+
+    return {
+      success: evalResult && evalResult.success !== false,
+      total: evalResult && evalResult.leads ? evalResult.leads.length : 0,
+      leads: evalResult && evalResult.leads ? evalResult.leads : [],
+      url_busqueda: targetUrl
+    };
+  } catch (err) {
+    return {
+      success: false,
+      total: 0,
+      leads: [],
+      error: err.message,
+      url_busqueda: targetUrl
+    };
+  }
+}
+
+/**
  * 4.1 LI_SYNC_CONNECTIONS: Compatibilidad con el ejecutor de comandos
  */
 async function handleLinkedInSyncConnections(win, params) {
@@ -1362,5 +1608,7 @@ async function handleZohoBridgeAction(win, action, params) {
 module.exports = {
   executeAction,
   handleLinkedInExtractNetwork,
-  handleLinkedInEnrichProfile
+  handleLinkedInEnrichProfile,
+  handleLinkedInReadContactInfo,
+  handleLinkedInSearchPeople
 };

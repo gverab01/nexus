@@ -49,8 +49,8 @@ def log_event(
 
     try:
         import database
-        current_t = database._current_tenant_ctx.get()
-        with get_db() as conn:
+        current_t = database._current_tenant_ctx.get() or "ten_primary"
+        with get_db(tenant_id=current_t) as conn:
             cursor = conn.cursor()
             if getattr(database, "IS_POSTGRES", False):
                 cursor.execute("""

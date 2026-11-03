@@ -578,6 +578,27 @@ def extract_contact_info_from_electron(profile_url: str) -> dict:
             return {"success": False, "error": str(e)}
     return {"success": False, "error": "Electron no está activo"}
 
+def search_people_from_electron(term: str, page: int = 1) -> dict:
+    """
+    Invoca la búsqueda y extracción precompilada segura de personas en LinkedIn en Chromium (Electron).
+    term: Término de búsqueda (ej. 'Director', 'CEO').
+    page: Número de página (1 a 20).
+    """
+    if is_electron_running():
+        try:
+            body = json.dumps({"term": term, "page": page}).encode("utf-8")
+            req = urllib.request.Request(
+                f"{ELECTRON_BASE_URL}/extract/search",
+                data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=60.0) as res:
+                return json.loads(res.read().decode("utf-8"))
+        except Exception as e:
+            return {"success": False, "error": str(e), "leads": []}
+    return {"success": False, "error": "Electron no está activo", "leads": []}
+
 def hide_work_browser(channel: Optional[str] = None) -> dict:
     """Oculta la ventana de Chromium embebido en Electron."""
     if is_electron_running():

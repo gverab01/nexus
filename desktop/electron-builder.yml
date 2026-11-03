@@ -1,0 +1,84 @@
+# NexusReach Pro — Configuración de Distribución y Empaquetado Electron (Workstream 5.11)
+# Directrices v1.3
+
+appId: com.nexusreach.desktop
+productName: NexusReach Pro
+copyright: Copyright © 2026 NexusReach B2B Inc.
+
+directories:
+  output: dist
+  buildResources: build
+
+files:
+  - "**/*"
+  - "!node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}"
+  - "!node_modules/*/{test,__tests__,tests,pow-test}"
+  - "!node_modules/*.d.ts"
+  - "!node_modules/.bin"
+  - "!tests/**"
+  - "!scratch/**"
+  - "!*.bat"
+  - "!*.py"
+  - "!*.sql"
+
+extraMetadata:
+  main: main.cjs
+
+# Configuración de Auto-Actualización Segura
+publish:
+  provider: generic
+  url: https://releases.nexusreach.io/desktop/
+  channel: latest
+
+# ------------------------------------------------------------------------------
+# WINDOWS (NSIS)
+# ------------------------------------------------------------------------------
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: build/icons/icon.ico
+  verifyUpdateCodeSignature: true
+  signAndEditExecutable: true
+  rfc3161TimeStampServer: "http://timestamp.digicert.com"
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: NexusReach Pro
+  uninstallDisplayName: NexusReach Pro - Suite de Prospección B2B
+
+# ------------------------------------------------------------------------------
+# MACOS (DMG & Hardened Runtime)
+# ------------------------------------------------------------------------------
+mac:
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+    - target: zip
+      arch:
+        - x64
+        - arm64
+  category: public.app-category.business
+  icon: build/icons/icon.icns
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
+  notarize:
+    teamId: "${APPLE_TEAM_ID}"
+
+dmg:
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications

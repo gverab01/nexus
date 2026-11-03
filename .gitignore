@@ -13,9 +13,18 @@ ENV/
 # Sensitive data, databases & prospect dumps
 leads.db
 *.db
+*.db-shm
+*.db-wal
+*.db-journal
 *.sqlite
 *.sqlite3
 prospectos.json
+scratch/
+backups/
+*.dump
+storage/
+.agent/
+
 
 # Environment variables & credentials
 .env

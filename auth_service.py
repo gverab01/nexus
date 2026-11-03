@@ -1,4 +1,5 @@
 import os
+import time
 import secrets
 import hashlib
 import json
@@ -12,9 +13,19 @@ from database import get_db
 # MOTOR DE AUTENTICACIÓN, TENANTS Y SUSCRIPCIONES (NexusReach Pro)
 # ==============================================================================
 
+SESSION_TTL_SECONDS = 7 * 24 * 3600  # 7 días de validez de sesión en memoria
+DB_VALIDATION_CACHE_SECONDS = 30     # 30 segundos de micro-caché para revalidaciones en BD
+
 # In-memory active sessions store:
 ACTIVE_SESSIONS: Dict[str, Dict[str, Any]] = {}
 SESIONES_ACTIVAS = ACTIVE_SESSIONS
+
+def purge_expired_sessions():
+    """Elimina sesiones inactivas o vencidas para evitar fugas de memoria."""
+    now_ts = time.time()
+    expired_keys = [k for k, v in ACTIVE_SESSIONS.items() if v.get("expires_at", 0) < now_ts]
+    for k in expired_keys:
+        ACTIVE_SESSIONS.pop(k, None)
 
 def hash_password(password: str, salt: Optional[str] = None) -> Tuple[str, str]:
     """Genera hash seguro PBKDF2 con salt criptográfico de 16 bytes."""
@@ -36,6 +47,30 @@ def verify_password(password: str, salt: str, password_hash: str) -> bool:
 # ==============================================================================
 # SEMBRADO INICIAL DEL ECOSISTEMA MULTI-TENANT (Fase 1)
 # ==============================================================================
+
+def _upsert_user_seed(cursor, user_tuple):
+    """Inserta o actualiza un usuario en la siembra inicial, compatible con SQLite y PostgreSQL."""
+    import database
+    if getattr(database, "IS_POSTGRES", False):
+        cursor.execute("""
+            INSERT INTO usuarios (id, tenant_id, email, nombre, password_hash, salt, rol, puesto_activo, estado, suscripcion_expira, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (id) DO UPDATE SET
+                email = EXCLUDED.email,
+                nombre = EXCLUDED.nombre,
+                password_hash = EXCLUDED.password_hash,
+                salt = EXCLUDED.salt,
+                rol = EXCLUDED.rol,
+                puesto_activo = EXCLUDED.puesto_activo,
+                estado = EXCLUDED.estado,
+                suscripcion_expira = EXCLUDED.suscripcion_expira,
+                updated_at = EXCLUDED.updated_at
+        """, user_tuple)
+    else:
+        cursor.execute("""
+            INSERT OR REPLACE INTO usuarios (id, tenant_id, email, nombre, password_hash, salt, rol, puesto_activo, estado, suscripcion_expira, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, user_tuple)
 
 def _seed_ecosystem(cursor):
     """Inicializa la base de datos con un ecosistema completo para pruebas inmediatas."""
@@ -66,10 +101,7 @@ def _seed_ecosystem(cursor):
     """, ("sub_superadmin", ahora_iso, dos_anos_iso, ahora_iso, ahora_iso))
 
     p_admin_hash, admin_salt = hash_password("admin123")
-    cursor.execute("""
-        INSERT OR REPLACE INTO usuarios (id, tenant_id, email, nombre, password_hash, salt, rol, puesto_activo, estado, suscripcion_expira, created_at, updated_at)
-        VALUES (?, 'ten_superadmin', ?, ?, ?, ?, 'SUPER_ADMIN', 1, 'ACTIVO', ?, ?, ?)
-    """, ("usr_superadmin", "admin@nexusreach.com", "Gabriel (Super Admin)", p_admin_hash, admin_salt, dos_anos_iso, ahora_iso, ahora_iso))
+    _upsert_user_seed(cursor, ("usr_superadmin", "ten_superadmin", "admin@nexusreach.com", "Gabriel (Super Admin)", p_admin_hash, admin_salt, "SUPER_ADMIN", 1, "ACTIVO", dos_anos_iso, ahora_iso, ahora_iso))
 
     # --------------------------------------------------------------------------
     # 2. TENANT EMPRESA CORPORATIVA DIRECTA (TechCorp)
@@ -85,16 +117,10 @@ def _seed_ecosystem(cursor):
     """, ("sub_techcorp", ahora_iso, un_ano_iso, ahora_iso, ahora_iso))
 
     p_tech_adm, s_tech_adm = hash_password("tech123")
-    cursor.execute("""
-        INSERT OR REPLACE INTO usuarios (id, tenant_id, email, nombre, password_hash, salt, rol, puesto_activo, estado, suscripcion_expira, created_at, updated_at)
-        VALUES (?, 'ten_techcorp', ?, ?, ?, ?, 'COMPANY_ADMIN', 1, 'ACTIVO', ?, ?, ?)
-    """, ("usr_tech_adm", "admin@techcorp.com", "Gerente TechCorp", p_tech_adm, s_tech_adm, un_ano_iso, ahora_iso, ahora_iso))
+    _upsert_user_seed(cursor, ("usr_tech_adm", "ten_techcorp", "admin@techcorp.com", "Gerente TechCorp", p_tech_adm, s_tech_adm, "COMPANY_ADMIN", 1, "ACTIVO", un_ano_iso, ahora_iso, ahora_iso))
 
     p_tech_vend, s_tech_vend = hash_password("vend123")
-    cursor.execute("""
-        INSERT OR REPLACE INTO usuarios (id, tenant_id, email, nombre, password_hash, salt, rol, puesto_activo, estado, suscripcion_expira, created_at, updated_at)
-        VALUES (?, 'ten_techcorp', ?, ?, ?, ?, 'COMPANY_MEMBER', 1, 'ACTIVO', ?, ?, ?)
-    """, ("usr_tech_vend", "vendedor@techcorp.com", "Vendedor TechCorp", p_tech_vend, s_tech_vend, un_ano_iso, ahora_iso, ahora_iso))
+    _upsert_user_seed(cursor, ("usr_tech_vend", "ten_techcorp", "vendedor@techcorp.com", "Vendedor TechCorp", p_tech_vend, s_tech_vend, "COMPANY_MEMBER", 1, "ACTIVO", un_ano_iso, ahora_iso, ahora_iso))
 
     # --------------------------------------------------------------------------
     # 3. TENANT MATRIZ AGENCIA (GrowthX Media)
@@ -110,10 +136,7 @@ def _seed_ecosystem(cursor):
     """, ("sub_growthx", ahora_iso, un_mes_iso, ahora_iso, ahora_iso))
 
     p_growth, s_growth = hash_password("growth123")
-    cursor.execute("""
-        INSERT OR REPLACE INTO usuarios (id, tenant_id, email, nombre, password_hash, salt, rol, puesto_activo, estado, suscripcion_expira, created_at, updated_at)
-        VALUES (?, 'ten_growthx', ?, ?, ?, ?, 'AGENCY_ADMIN', 1, 'ACTIVO', ?, ?, ?)
-    """, ("usr_growth_adm", "agencia@growthx.com", "Director GrowthX", p_growth, s_growth, un_mes_iso, ahora_iso, ahora_iso))
+    _upsert_user_seed(cursor, ("usr_growth_adm", "ten_growthx", "agencia@growthx.com", "Director GrowthX", p_growth, s_growth, "AGENCY_ADMIN", 1, "ACTIVO", un_mes_iso, ahora_iso, ahora_iso))
 
     # Sub-Tenant 3A: Cliente Colegio San Agustín (Cobro Por Reunión: $150 c/u)
     cursor.execute("""
@@ -122,10 +145,7 @@ def _seed_ecosystem(cursor):
     """, ("ten_sanagustin", "Colegio San Agustín", ahora_iso, ahora_iso))
 
     p_san, s_san = hash_password("san123")
-    cursor.execute("""
-        INSERT OR REPLACE INTO usuarios (id, tenant_id, email, nombre, password_hash, salt, rol, puesto_activo, estado, suscripcion_expira, created_at, updated_at)
-        VALUES (?, 'ten_sanagustin', ?, ?, ?, ?, 'COMPANY_MEMBER', 1, 'ACTIVO', ?, ?, ?)
-    """, ("usr_san_dir", "director@sanagustin.cl", "Rector San Agustín", p_san, s_san, un_mes_iso, ahora_iso, ahora_iso))
+    _upsert_user_seed(cursor, ("usr_san_dir", "ten_sanagustin", "director@sanagustin.cl", "Rector San Agustín", p_san, s_san, "COMPANY_MEMBER", 1, "ACTIVO", un_mes_iso, ahora_iso, ahora_iso))
 
     # Sub-Tenant 3B: Cliente Fintech Soluciones (Cobro Por Puesto: $75/puesto)
     cursor.execute("""
@@ -134,10 +154,7 @@ def _seed_ecosystem(cursor):
     """, ("ten_fintech", "Fintech Soluciones SpA", ahora_iso, ahora_iso))
 
     p_fin, s_fin = hash_password("fin123")
-    cursor.execute("""
-        INSERT OR REPLACE INTO usuarios (id, tenant_id, email, nombre, password_hash, salt, rol, puesto_activo, estado, suscripcion_expira, created_at, updated_at)
-        VALUES (?, 'ten_fintech', ?, ?, ?, ?, 'COMPANY_MEMBER', 1, 'ACTIVO', ?, ?, ?)
-    """, ("usr_fin_sales", "sales@fintech.com", "Account Exec Fintech", p_fin, s_fin, un_mes_iso, ahora_iso, ahora_iso))
+    _upsert_user_seed(cursor, ("usr_fin_sales", "ten_fintech", "sales@fintech.com", "Account Exec Fintech", p_fin, s_fin, "COMPANY_MEMBER", 1, "ACTIVO", un_mes_iso, ahora_iso, ahora_iso))
 
     # --------------------------------------------------------------------------
     # 4. TENANT FREELANCE MONOUSUARIO (Consultor Independiente)
@@ -153,10 +170,7 @@ def _seed_ecosystem(cursor):
     """, ("sub_freelance", ahora_iso, un_mes_iso, ahora_iso, ahora_iso))
 
     p_demo, s_demo = hash_password("demo123")
-    cursor.execute("""
-        INSERT OR REPLACE INTO usuarios (id, tenant_id, email, nombre, password_hash, salt, rol, puesto_activo, estado, suscripcion_expira, created_at, updated_at)
-        VALUES (?, 'ten_freelance', ?, ?, ?, ?, 'INDIVIDUAL', 1, 'ACTIVO', ?, ?, ?)
-    """, ("usr_demo", "demo@nexusreach.com", "Usuario Demo Freelance", p_demo, s_demo, un_mes_iso, ahora_iso, ahora_iso))
+    _upsert_user_seed(cursor, ("usr_demo", "ten_freelance", "demo@nexusreach.com", "Usuario Demo Freelance", p_demo, s_demo, "INDIVIDUAL", 1, "ACTIVO", un_mes_iso, ahora_iso, ahora_iso))
 
     print("🏛️ [Multi-Tenant Core] Ecosistema completo inicializado (Super Admin, Empresa Directa, Agencia con Sub-Clientes y Freelancer).")
 
@@ -175,7 +189,7 @@ def seed_multitenant_ecosystem_if_empty(cursor=None, conn=None):
 # ==============================================================================
 
 def calculate_days_remaining(expires_iso: str) -> int:
-    """Calculates remaining subscription days."""
+    """Calcula los días restantes de vigencia de la suscripción."""
     try:
         expires_dt = datetime.fromisoformat(expires_iso)
         delta = expires_dt - datetime.now()
@@ -228,7 +242,7 @@ def get_subscription_by_tenant(tenant_id: str, conn=None) -> Optional[Dict[str, 
         return cursor.fetchone()
 
 def count_occupied_seats_tenant(tenant_id: str, conn=None) -> int:
-    """Calculates how many active seats are occupied by a tenant or agency with its clients."""
+    """Calcula cuántos puestos activos están ocupados por un tenant o agencia con sus clientes."""
     query = """
         SELECT COUNT(*) as total 
         FROM usuarios 
@@ -262,7 +276,13 @@ def authenticate_user(email: str, password: str, remote_url: Optional[str] = Non
             "mensaje": "Por favor ingresa tanto tu correo electrónico como tu contraseña."
         }
 
-    user = get_user_by_email(email)
+    import database
+    if getattr(database, "IS_POSTGRES", False):
+        with database.tenant_context_scope(is_super_admin=True):
+            user = get_user_by_email(email)
+    else:
+        user = get_user_by_email(email)
+
     if not user:
         return {
             "exito": False,
@@ -295,7 +315,12 @@ def authenticate_user(email: str, password: str, remote_url: Optional[str] = Non
 
     # 3. Validar Tenant y Suscripción Asociada
     tenant_id = user.get("tenant_id")
-    tenant = get_tenant_by_id(tenant_id) if tenant_id else None
+    is_sa = (user.get("rol") == "SUPER_ADMIN")
+    if getattr(database, "IS_POSTGRES", False):
+        with database.tenant_context_scope(tenant_id=tenant_id, is_super_admin=is_sa):
+            tenant = get_tenant_by_id(tenant_id) if tenant_id else None
+    else:
+        tenant = get_tenant_by_id(tenant_id) if tenant_id else None
     
     # El Super Admin siempre tiene acceso
     if user.get("rol") == "SUPER_ADMIN":
@@ -310,7 +335,11 @@ def authenticate_user(email: str, password: str, remote_url: Optional[str] = Non
 
         # Si es cliente de agencia, la suscripción que rige es la de la agencia matriz
         target_tenant_id = tenant.get("parent_tenant_id") or tenant["id"]
-        subscription = get_subscription_by_tenant(target_tenant_id)
+        if getattr(database, "IS_POSTGRES", False):
+            with database.tenant_context_scope(tenant_id=target_tenant_id, is_super_admin=is_sa):
+                subscription = get_subscription_by_tenant(target_tenant_id)
+        else:
+            subscription = get_subscription_by_tenant(target_tenant_id)
 
         if not subscription:
             return {
@@ -390,18 +419,30 @@ def authenticate_user(email: str, password: str, remote_url: Optional[str] = Non
             "fee_fijo_mensual": tenant.get("fee_fijo_mensual", 0.0) if tenant else 0.0,
         } if tenant else None,
         "suscripcion": subscription_info,
-        "login_at": now_iso
+        "login_at": now_iso,
+        "expires_at": time.time() + SESSION_TTL_SECONDS,
+        "last_db_check": time.time()
     }
 
+    purge_expired_sessions()
     ACTIVE_SESSIONS[token] = profile
 
     # Registrar último login y audit log
-    with get_db() as c:
-        c.cursor().execute("UPDATE usuarios SET ultimo_login = ?, updated_at = ? WHERE id = ?", (now_iso, now_iso, user["id"]))
-        c.cursor().execute("""
-            INSERT INTO audit_logs (tenant_id, usuario_id, accion, detalle_json, timestamp)
-            VALUES (?, ?, 'LOGIN_EXITOSO', ?, ?)
-        """, (tenant_id, user["id"], json.dumps({"rol": user["rol"]}), now_iso))
+    if getattr(database, "IS_POSTGRES", False):
+        with database.tenant_context_scope(tenant_id=tenant_id, is_super_admin=is_sa):
+            with get_db() as c:
+                c.cursor().execute("UPDATE usuarios SET ultimo_login = ?, updated_at = ? WHERE id = ?", (now_iso, now_iso, user["id"]))
+                c.cursor().execute("""
+                    INSERT INTO audit_logs (tenant_id, usuario_id, accion, detalle_json, timestamp)
+                    VALUES (?, ?, 'LOGIN_EXITOSO', ?, ?)
+                """, (tenant_id, user["id"], json.dumps({"rol": user["rol"]}), now_iso))
+    else:
+        with get_db() as c:
+            c.cursor().execute("UPDATE usuarios SET ultimo_login = ?, updated_at = ? WHERE id = ?", (now_iso, now_iso, user["id"]))
+            c.cursor().execute("""
+                INSERT INTO audit_logs (tenant_id, usuario_id, accion, detalle_json, timestamp)
+                VALUES (?, ?, 'LOGIN_EXITOSO', ?, ?)
+            """, (tenant_id, user["id"], json.dumps({"rol": user["rol"]}), now_iso))
 
     return {
         "exito": True,
@@ -411,34 +452,54 @@ def authenticate_user(email: str, password: str, remote_url: Optional[str] = Non
     }
 
 def verify_token(token: str) -> Optional[Dict[str, Any]]:
-    """Valida un token en memoria y revalida la vigencia de la suscripción."""
+    """Valida un token en memoria y revalida la vigencia de la suscripción con micro-caché."""
     if not token or token not in ACTIVE_SESSIONS:
         return None
     
     session_data = ACTIVE_SESSIONS[token]
-    user = get_user_by_id(session_data["id"])
-    if not user or user.get("estado") != "ACTIVO" or user.get("puesto_activo", 1) == 0:
+    now_ts = time.time()
+    if session_data.get("expires_at", 0) < now_ts:
         ACTIVE_SESSIONS.pop(token, None)
         return None
 
-    if user.get("rol") != "SUPER_ADMIN":
-        tenant = get_tenant_by_id(user.get("tenant_id"))
-        if not tenant or tenant.get("estado") != "ACTIVO":
+    # Si se validó en BD hace menos de 30 segundos, retornar sesión en memoria de forma instantánea
+    if now_ts - session_data.get("last_db_check", 0) < DB_VALIDATION_CACHE_SECONDS:
+        return session_data
+
+    import database
+
+    def _do_revalidation():
+        user = get_user_by_id(session_data["id"])
+        if not user or user.get("estado") != "ACTIVO" or user.get("puesto_activo", 1) == 0:
             ACTIVE_SESSIONS.pop(token, None)
             return None
 
-        t_val_id = tenant.get("parent_tenant_id") or tenant["id"]
-        sub = get_subscription_by_tenant(t_val_id)
-        if not sub or sub.get("estado") not in ["ACTIVA", "EN_PRUEBA"]:
-            ACTIVE_SESSIONS.pop(token, None)
-            return None
+        if user.get("rol") != "SUPER_ADMIN":
+            tenant = get_tenant_by_id(user.get("tenant_id"))
+            if not tenant or tenant.get("estado") != "ACTIVO":
+                ACTIVE_SESSIONS.pop(token, None)
+                return None
 
-        # Actualizar días restantes al vuelo
-        days = calculate_days_remaining(sub.get("fecha_expiracion", ""))
-        session_data["suscripcion"]["dias_restantes"] = days
-        session_data["suscripcion"]["estado"] = sub.get("estado")
+            t_val_id = tenant.get("parent_tenant_id") or tenant["id"]
+            sub = get_subscription_by_tenant(t_val_id)
+            if not sub or sub.get("estado") not in ["ACTIVA", "EN_PRUEBA"]:
+                ACTIVE_SESSIONS.pop(token, None)
+                return None
 
-    return session_data
+            # Actualizar días restantes al vuelo
+            days = calculate_days_remaining(sub.get("fecha_expiracion", ""))
+            if session_data.get("suscripcion"):
+                session_data["suscripcion"]["dias_restantes"] = days
+                session_data["suscripcion"]["estado"] = sub.get("estado")
+
+        session_data["last_db_check"] = now_ts
+        return session_data
+
+    if getattr(database, "IS_POSTGRES", False):
+        with database.tenant_context_scope(is_super_admin=True):
+            return _do_revalidation()
+    else:
+        return _do_revalidation()
 
 def logout_user(token: str) -> bool:
     """Elimina el token de la memoria."""
@@ -703,20 +764,6 @@ def create_account_full(
                     expires_iso, now_iso, now_iso
                 ))
 
-        # Crear lista inicial por defecto para que la cuenta pueda prospectar de inmediato
-        init_list_id = f"lista-{secrets.token_hex(4)}"
-        cursor.execute("""
-            INSERT INTO listas_leads (id, tenant_id, nombre, descripcion, estado, created_at, updated_at)
-            VALUES (?, ?, 'Mi Primera Lista', 'Lista inicial creada automáticamente para prospección', 'ACTIVA', ?, ?)
-        """, (init_list_id, new_tenant_id, now_iso, now_iso))
-
-        if sub_cli_id:
-            sub_list_id = f"lista-{secrets.token_hex(4)}"
-            cursor.execute("""
-                INSERT INTO listas_leads (id, tenant_id, nombre, descripcion, estado, created_at, updated_at)
-                VALUES (?, ?, 'Mi Primera Lista', 'Lista inicial creada automáticamente para prospección', 'ACTIVA', ?, ?)
-            """, (sub_list_id, sub_cli_id, now_iso, now_iso))
-
         # Registrar log de auditoría
         cursor.execute("""
             INSERT INTO audit_logs (tenant_id, usuario_id, accion, detalle_json, timestamp)
@@ -852,7 +899,13 @@ def create_user_for_tenant(
         return {"exito": False, "mensaje": "Organización no encontrada."}
 
     # Verify existing email
-    if get_user_by_email(email):
+    import database
+    if getattr(database, "IS_POSTGRES", False):
+        with database.tenant_context_scope(is_super_admin=True):
+            existing_user = get_user_by_email(email)
+    else:
+        existing_user = get_user_by_email(email)
+    if existing_user:
         return {"exito": False, "mensaje": "Ya existe un usuario con este correo electrónico."}
 
     # Validate seat quota
@@ -1132,32 +1185,5 @@ def update_user_subscription(
         "suscripcion_expira": new_exp,
         "mensaje": "Suscripción de usuario actualizada con éxito"
     }
-
-# ==========================================
-# BACKWARD COMPATIBILITY ALIASES
-# ==========================================
-SESIONES_ACTIVAS = ACTIVE_SESSIONS
-calcular_dias_restantes = calculate_days_remaining
-obtener_usuario_por_email = get_user_by_email
-obtener_usuario_por_id = get_user_by_id
-obtener_tenant_por_id = get_tenant_by_id
-obtener_suscripcion_por_tenant = get_subscription_by_tenant
-contar_puestos_ocupados_tenant = count_occupied_seats_tenant
-autenticar_usuario = authenticate_user
-verificar_token = verify_token
-cerrar_sesion = logout_user
-listar_tenants_global = list_global_tenants
-revocar_licencia_tenant = revoke_tenant_license
-reactivar_licencia_tenant = reactivate_tenant_license
-actualizar_puestos_bolsa = update_seat_pool
-listar_subtenants_agencia = list_agency_subtenants
-crear_cliente_agencia = create_agency_client
-listar_usuarios_tenant = list_tenant_users
-crear_usuario_para_tenant = create_user_for_tenant
-toggle_puesto_usuario = toggle_user_seat
-marcar_lead_reunion_agendada = mark_lead_meeting_booked
-obtener_resumen_financiero_agencia = get_agency_financial_summary
-listar_usuarios = list_users
-actualizar_suscripcion_usuario = update_user_subscription
 
 

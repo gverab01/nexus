@@ -31,8 +31,10 @@ export default function AddStepModal({ initialPosition = 'final', existingSteps 
       ENVIAR_INVITACION: 'Enviar Invitación a Conectar',
       ENVIAR_MENSAJE_LINKEDIN: 'Mensaje Directo 1er Grado',
       ENVIAR_CORREO_WORKSPACE: 'Email Institucional Workspace',
+      ENVIAR_WHATSAPP_WEB: 'Mensaje WhatsApp Web (Local Antiban)',
       VERIFICAR_ESTADO: 'Verificar si Aceptó Conexión',
       RETIRAR_INVITACION: 'Retirar Solicitud Pendiente',
+      EXTRAER_CORREO: 'Resolver y Extraer Email (LinkedIn / Cascada)',
     };
     if (defaultLabels[type]) {
       setLabel(defaultLabels[type]);
@@ -69,6 +71,12 @@ export default function AddStepModal({ initialPosition = 'final', existingSteps 
         asunto: emailSubject || 'Contacto institucional',
         cuerpo_email: template,
         cuerpo: template,
+      };
+    } else if (actionType === 'ENVIAR_WHATSAPP_WEB') {
+      newStep.parametros = {
+        plantilla_mensaje: template || 'Hola {nombre}, un gusto saludarte. Te contacto en relación a tu labor en {empresa}.',
+        mensaje: template,
+        canal: 'whatsapp_web',
       };
     }
 
@@ -150,8 +158,10 @@ export default function AddStepModal({ initialPosition = 'final', existingSteps 
               <option value="ENVIAR_INVITACION">LinkedIn: Enviar Invitación a Conectar</option>
               <option value="ENVIAR_MENSAJE_LINKEDIN">LinkedIn: Enviar Mensaje Directo (1er Grado)</option>
               <option value="ENVIAR_CORREO_WORKSPACE">Google Workspace: Enviar Correo Institucional</option>
+              <option value="ENVIAR_WHATSAPP_WEB">WhatsApp Web: Mensaje Local Directo (Antiban)</option>
               <option value="VERIFICAR_ESTADO">Bifurcación: Verificar si Aceptó Conexión</option>
               <option value="RETIRAR_INVITACION">LinkedIn: Retirar Solicitud Pendiente</option>
+              <option value="EXTRAER_CORREO">Enriquecimiento: Resolver Correo (1er Grado / Cascada)</option>
             </select>
           </div>
 
@@ -192,16 +202,31 @@ export default function AddStepModal({ initialPosition = 'final', existingSteps 
             </div>
           )}
 
-          {(actionType === 'ENVIAR_INVITACION' || actionType === 'ENVIAR_MENSAJE_LINKEDIN' || actionType === 'ENVIAR_CORREO_WORKSPACE') && (
+          {(actionType === 'ENVIAR_INVITACION' || actionType === 'ENVIAR_MENSAJE_LINKEDIN' || actionType === 'ENVIAR_CORREO_WORKSPACE' || actionType === 'ENVIAR_WHATSAPP_WEB') && (
             <div>
-              <label className="block text-zinc-400 mb-1 font-medium">Plantilla de Mensaje / Texto</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-zinc-400 font-medium">Plantilla de Mensaje / Texto</label>
+                {actionType === 'ENVIAR_WHATSAPP_WEB' && (
+                  <span className="text-[10px] text-emerald-400 font-mono flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                    WhatsApp Web Local
+                  </span>
+                )}
+              </div>
               <textarea 
                 rows={3}
                 value={template}
                 onChange={(e) => setTemplate(e.target.value)}
-                placeholder="Texto con variables {nombre}, {empresa}, {cargo}..."
+                placeholder={
+                  actionType === 'ENVIAR_WHATSAPP_WEB'
+                    ? '{Hola|Buenos días} {nombre}, un gusto saludarte. Te contacto por tu rol en {empresa}...'
+                    : 'Texto con variables {nombre}, {empresa}, {cargo}...'
+                }
                 className="w-full bg-zinc-950 border border-zinc-800 px-3 py-1.5 rounded-lg text-zinc-200 focus:outline-hidden focus:border-sky-500 font-sans"
               />
+              <span className="text-[10px] text-zinc-500 mt-1 block">
+                Variables: {'{nombre}'}, {'{empresa}'}, {'{cargo}'}. Soporta Spintax: {'{Hola|Buenos días|Estimado/a}'}.
+              </span>
             </div>
           )}
 

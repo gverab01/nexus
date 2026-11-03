@@ -1,0 +1,109 @@
+[
+  {
+    "id": "rodrigo-price-rojas-473943202",
+    "nombre": "Rodrigo Price Rojas",
+    "cargo_titular": "Director de Colegio/ Líder Educativo Senior/ Magíster en Educación/ Profesor de Biología",
+    "institucion_actual": "Colegio San Felipe Diácono",
+    "ubicacion": "Área metropolitana de Santiago, Chile",
+    "grado_red": "2º",
+    "perfil_url": "https://www.linkedin.com/in/rodrigo-price-rojas-473943202/",
+    "estado": "INVITACION_ENVIADA",
+    "estado_linkedin_detectado": "Pendiente",
+    "fecha_extraccion": "2026-10-08",
+    "fecha_visita": "2026-10-08T18:15:20-03:00",
+    "fecha_invitacion": "2026-10-08T18:23:25-03:00",
+    "historial": [
+      {
+        "fecha": "2026-10-08T18:13:30-03:00",
+        "accion": "EXTRAIDO_DE_BUSQUEDA",
+        "detalle": "Búsqueda inicial: Director de Colegio"
+      },
+      {
+        "fecha": "2026-10-08T18:15:20-03:00",
+        "accion": "PERFIL_VISITADO",
+        "detalle": "Visita orgánica realizada con éxito. Notificación de vista registrada en LinkedIn."
+      },
+      {
+        "fecha": "2026-10-08T18:23:25-03:00",
+        "accion": "INVITACION_ENVIADA",
+        "detalle": "Invitación enviada sin nota. Estado en perfil verificado como 'Pendiente'."
+      }
+    ]
+  },
+  {
+    "id": "claudia-celedon-gadal-b976b228b",
+    "nombre": "Claudia Celedón Gadal",
+    "cargo_titular": "Director Académico colegio Mariano de Schoenstatt",
+    "institucion_actual": "Colegio Pumahue Huechuraba",
+    "ubicacion": "Gran Santiago, Región Metropolitana de Santiago, Chile",
+    "grado_red": "2º",
+    "perfil_url": "https://www.linkedin.com/in/claudia-celed%C3%B3n-gadal-b976b228b/",
+    "estado": "INVITACION_PENDIENTE",
+    "estado_linkedin_detectado": "Pendiente",
+    "fecha_extraccion": "2026-10-08",
+    "historial": [
+      {
+        "fecha": "2026-10-08T18:13:30-03:00",
+        "accion": "EXTRAIDO_DE_BUSQUEDA",
+        "detalle": "Detectada con invitación previa ya pendiente en LinkedIn"
+      }
+    ]
+  },
+  {
+    "id": "luis-beldano-calvo-83979086",
+    "nombre": "Luis Beldaño Calvo",
+    "cargo_titular": "Director Administrativo Colegio Academia de Humanidades",
+    "institucion_actual": "Colegio Academia de Humanidades",
+    "ubicacion": "Chile",
+    "grado_red": "2º",
+    "perfil_url": "https://www.linkedin.com/in/luis-belda%C3%B1o-calvo-83979086/",
+    "estado": "EXTRAIDO",
+    "estado_linkedin_detectado": "Conectar",
+    "fecha_extraccion": "2026-10-08",
+    "historial": [
+      {
+        "fecha": "2026-10-08T18:13:30-03:00",
+        "accion": "EXTRAIDO_DE_BUSQUEDA",
+        "detalle": "Búsqueda inicial: Director de Colegio"
+      }
+    ]
+  },
+  {
+    "id": "carlos-cespedes-morgado-21251ba4",
+    "nombre": "Carlos Céspedes Morgado",
+    "cargo_titular": "Director de colegio",
+    "institucion_actual": "Fundación Educacional Preciosa Sangre",
+    "ubicacion": "Chile",
+    "grado_red": "2º",
+    "perfil_url": "https://www.linkedin.com/in/carlos-c%C3%A9spedes-morgado-21251ba4/",
+    "estado": "EXTRAIDO",
+    "estado_linkedin_detectado": "Conectar",
+    "fecha_extraccion": "2026-10-08",
+    "historial": [
+      {
+        "fecha": "2026-10-08T18:13:30-03:00",
+        "accion": "EXTRAIDO_DE_BUSQUEDA",
+        "detalle": "Búsqueda inicial: Director de Colegio"
+      }
+    ]
+  },
+  {
+    "id": "christian-silva-01527074",
+    "nombre": "Christian Silva",
+    "cargo_titular": "Director de estudios en Colegio Pumahue Chicauma",
+    "institucion_actual": "Colegio Pumahue Chicauma",
+    "ubicacion": "Lampa, Región Metropolitana de Santiago, Chile",
+    "grado_red": "2º",
+    "perfil_url": "https://www.linkedin.com/in/christian-silva-01527074/",
+    "estado": "EXTRAIDO",
+    "estado_linkedin_detectado": "Conectar",
+    "fecha_extraccion": "2026-10-08",
+    "historial": [
+      {
+        "fecha": "2026-10-08T18:13:30-03:00",
+        "accion": "EXTRAIDO_DE_BUSQUEDA",
+        "detalle": "Búsqueda inicial: Director de Colegio"
+      }
+    ]
+  }
+]

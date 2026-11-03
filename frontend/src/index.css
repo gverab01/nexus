@@ -1,33 +1,57 @@
 @import "tailwindcss";
 
-/* Design System Tokens - Minimalist / Linear / Stripe inspired */
+/* ==============================================================================
+   NEXUSREACH PRO - MINIMALIST DESIGN SYSTEM (TASK FASE 1)
+   Inspirado en interfaces de alta densidad operacional: Linear, Raycast, Vercel
+   ============================================================================== */
+
 :root {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   color-scheme: dark;
-  --bg-canvas: #090a0c;
-  --bg-surface: #121316;
-  --bg-surface-elevated: #18191e;
-  --border-subtle: rgba(255, 255, 255, 0.08);
-  --border-strong: rgba(255, 255, 255, 0.15);
-  --text-primary: #ededed;
-  --text-secondary: #a1a1aa;
-  --text-muted: #71717a;
+
+  /* Superficies y Fondos Funcionales */
+  --bg-canvas: #0E0F12;
+  --bg-surface: #14161A;
+  --bg-surface-elevated: #1A1D23;
+  --bg-surface-hover: rgba(255, 255, 255, 0.035);
+
+  /* Bordes Estructurales (1px nítidos) */
+  --border-default: #22252B;
+  --border-subtle: rgba(255, 255, 255, 0.05);
+  --border-focus: #3B82F6;
+
+  /* Escala Tipográfica de Contraste */
+  --text-primary: #F1F3F5;
+  --text-secondary: #9CA3AF;
+  --text-muted: #6B7280;
+
+  /* Acentos Semánticos */
+  --accent-action: #2563EB;
+  --accent-action-hover: #1D4ED8;
+  --status-emerald: #059669;
+  --status-amber: #D97706;
+  --status-rose: #DC2626;
 }
 
 body {
-  background-color: #090a0c;
-  color: #ededed;
-  letter-spacing: -0.011em;
+  background-color: var(--bg-canvas);
+  color: var(--text-primary);
+  letter-spacing: -0.012em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
 }
 
+/* Código y Datos Tabulares */
 code, pre, .font-mono {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+  font-feature-settings: "tnum" 1, "zero" 1;
 }
 
-/* Sleek subtle scrollbar */
+/* Scrollbar ultra delgado y discreto */
 ::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 4px;
+  height: 4px;
 }
 
 ::-webkit-scrollbar-track {
@@ -35,32 +59,45 @@ code, pre, .font-mono {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #27272a;
-  border-radius: 9999px;
+  background: #272A31;
+  border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #3f3f46;
+  background: #383D48;
 }
 
-/* Subtle selection */
+/* Selección de texto limpia */
 ::selection {
-  background: #27272a;
-  color: #ffffff;
+  background: #1D4ED8;
+  color: #FFFFFF;
 }
 
-/* Subtle pulse animation for status indicator dots */
-@keyframes subtle-dot {
+/* Indicador de pulso de estado sutil */
+@keyframes status-pulse {
   0%, 100% {
     opacity: 1;
-    transform: scale(1);
   }
   50% {
-    opacity: 0.5;
-    transform: scale(0.9);
+    opacity: 0.4;
   }
 }
 
-.animate-subtle-dot {
-  animation: subtle-dot 2.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+.animate-status-pulse {
+  animation: status-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Clases utilitarias de superficie minimalista */
+.surface-panel {
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-default);
+}
+
+.surface-hover {
+  transition: background-color 100ms ease, border-color 100ms ease;
+}
+
+.surface-hover:hover {
+  background-color: var(--bg-surface-hover);
+  border-color: rgba(255, 255, 255, 0.1);
 }

@@ -48,12 +48,20 @@ def log_event(
     }
 
     try:
+        import database
+        current_t = database._current_tenant_ctx.get()
         with get_db() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO system_logs (timestamp, level, module, message, details_json, lead_id, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (timestamp_iso, level_normalized, module_normalized, message, details_str, lead_id, timestamp_iso))
+            if getattr(database, "IS_POSTGRES", False):
+                cursor.execute("""
+                    INSERT INTO system_logs (tenant_id, timestamp, level, module, message, details_json, lead_id, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (current_t, timestamp_iso, level_normalized, module_normalized, message, details_str, lead_id, timestamp_iso))
+            else:
+                cursor.execute("""
+                    INSERT INTO system_logs (timestamp, level, module, message, details_json, lead_id, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (timestamp_iso, level_normalized, module_normalized, message, details_str, lead_id, timestamp_iso))
             log_record["id"] = cursor.lastrowid
     except Exception as e:
         logger.error(f"Error persistiendo suceso en system_logs: {e}")
@@ -183,11 +191,5 @@ def clear_logs() -> bool:
     log_event("INFO", "SYSTEM", "Consola de logs reiniciada por el usuario.")
     return True
 
-# ==========================================
-# ALIASES FOR BACKWARD COMPATIBILITY
-# ==========================================
-registrar_evento = log_event
-obtener_logs = get_logs
-obtener_estadisticas_logs = get_log_stats
-limpiar_logs = clear_logs
+
 

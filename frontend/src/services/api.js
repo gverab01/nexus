@@ -7,7 +7,7 @@ const TOKEN_KEY = 'nexus_session_token';
 
 export function getSessionToken() {
   try {
-    return sessionStorage.getItem(TOKEN_KEY);
+    return sessionStorage.getItem(TOKEN_KEY) || localStorage.getItem(TOKEN_KEY);
   } catch {
     return null;
   }
@@ -17,8 +17,10 @@ export function setSessionToken(token) {
   try {
     if (token) {
       sessionStorage.setItem(TOKEN_KEY, token);
+      localStorage.setItem(TOKEN_KEY, token);
     } else {
       sessionStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(TOKEN_KEY);
     }
   } catch {}
 }
@@ -26,6 +28,7 @@ export function setSessionToken(token) {
 export function clearSessionToken() {
   try {
     sessionStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(TOKEN_KEY);
   } catch {}
 }
 
@@ -35,7 +38,10 @@ export function clearSessionToken() {
 async function request(endpoint, options = {}) {
   try {
     const token = getSessionToken();
-    const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+    const authHeaders = token ? { 
+      Authorization: `Bearer ${token}`,
+      'X-Session-Token': token,
+    } : {};
 
     const config = {
       headers: {
@@ -197,39 +203,85 @@ export async function fetchMetrics(tenantId = '') {
   return await request(`/metricas${query}`);
 }
 
-export async function fetchProspects(estado = '', busqueda = '', tenantId = '') {
-  // Obtiene el listado completo de prospectos con filtros opcionales
+export async function fetchProspects(optionsOrEstado = {}, busquedaArg = '', tenantIdArg = '') {
+  // Obtiene el listado completo de prospectos con filtros avanzados
   const params = new URLSearchParams();
+  
+  let estado = '';
+  let busqueda = '';
+  let listaId = '';
+  let secuenciaId = '';
+  let fechaDesde = '';
+  let fechaHasta = '';
+  let orden = 'fecha_desc';
+  let tenantId = '';
+  let limit = 50;
+  let offset = 0;
+
+  if (typeof optionsOrEstado === 'object' && optionsOrEstado !== null) {
+    estado = optionsOrEstado.estado || '';
+    busqueda = optionsOrEstado.busqueda || '';
+    listaId = optionsOrEstado.listaId || '';
+    secuenciaId = optionsOrEstado.secuenciaId || '';
+    fechaDesde = optionsOrEstado.fechaDesde || '';
+    fechaHasta = optionsOrEstado.fechaHasta || '';
+    orden = optionsOrEstado.orden || 'fecha_desc';
+    tenantId = optionsOrEstado.tenantId || '';
+    limit = optionsOrEstado.limit || 50;
+    offset = optionsOrEstado.offset || 0;
+  } else {
+    estado = optionsOrEstado || '';
+    busqueda = busquedaArg || '';
+    tenantId = tenantIdArg || '';
+  }
+
   if (estado) params.append('estado', estado);
   if (busqueda) params.append('busqueda', busqueda);
+  if (listaId) params.append('lista_id', listaId);
+  if (secuenciaId) params.append('secuencia_id', secuenciaId);
+  if (fechaDesde) params.append('fecha_desde', fechaDesde);
+  if (fechaHasta) params.append('fecha_hasta', fechaHasta);
+  if (orden) params.append('orden', orden);
   if (tenantId) params.append('tenant_id', tenantId);
-  params.append('limit', '100');
+  params.append('limit', String(limit));
+  params.append('offset', String(offset));
+
   const query = `?${params.toString()}`;
-  
   const res = await request(`/prospectos${query}`);
-  // El endpoint de FastAPI retorna {"total": N, "leads": [...]}
-  const leads = Array.isArray(res) ? res : (res.leads || []);
+  const rawLeads = Array.isArray(res) ? res : (res.leads || []);
+  const total = typeof res?.total === 'number' ? res.total : rawLeads.length;
   
-  // Normalizar campos para compatibilidad con la vista
-  return leads.map(l => ({
+  const leads = rawLeads.map(l => ({
     id: l.id,
     nombre: l.nombre,
     cargo_actual: l.cargo_actual || l.cargo || l.cargo_titular || 'Profesional / Decisor',
     cargo_titular: l.cargo_titular || l.cargo || '',
     cargo: l.cargo_actual || l.cargo_titular || l.cargo || 'Profesional / Decisor',
     institucion: l.institucion_actual || l.institucion,
+    institucion_actual: l.institucion_actual || l.institucion,
     ubicacion: l.ubicacion || 'Chile',
     url_perfil: l.perfil_url || l.url_perfil,
-    grado_red: l.grado_red || '2°/3°',
+    perfil_url: l.perfil_url || l.url_perfil,
+    grado_red: l.grado_red || '2°',
     estado: l.estado || 'EXTRAIDO',
     email_directo: l.email || l.email_directo,
     telefono_directo: l.telefono || l.telefono_directo,
     fecha_extraccion: l.fecha_extraccion || l.created_at,
-    fecha_invitacion: l.fecha_invitacion,
-    fecha_conexion: l.fecha_conexion,
+    created_at: l.created_at,
+    updated_at: l.updated_at,
+    listas: Array.isArray(l.listas) ? l.listas : [],
+    secuencias: Array.isArray(l.secuencias) ? l.secuencias : [],
+    ultima_actividad: l.ultima_actividad || null,
     etiquetas: Array.isArray(l.tags) ? l.tags : [],
     historial_interacciones: l.historial || [],
   }));
+
+  return {
+    total,
+    limit,
+    offset,
+    leads,
+  };
 }
 
 export async function fetchLeadDetail(prospectId) {
@@ -276,6 +328,58 @@ export async function syncLeadWithLinkedIn(prospectId) {
   });
 }
 
+export async function resolveLeadEmail(prospectId, force = false) {
+  // Resuelve el correo del lead mediante extracción directa (1er grado) o cascada (Waterfall + DNS MX + SMTP)
+  return await request(`/prospectos/${prospectId}/resolver-correo?forzar=${force ? 'true' : 'false'}`, {
+    method: 'POST',
+  });
+}
+
+export async function batchResolveLeadEmails(leadIds, force = false) {
+  // Resuelve en bloque los correos de una lista de prospectos
+  return await request('/prospectos/lote/resolver-correo', {
+    method: 'POST',
+    body: JSON.stringify({ lead_ids: leadIds, forzar: force }),
+  });
+}
+
+export async function getZohoSessionStatus() {
+  // Consulta si la sesión de Zoho CRM está viva en el navegador de trabajo
+  return await request('/zoho/estado-sesion');
+}
+
+export async function loginZoho() {
+  // Abre la ventana de Zoho CRM para iniciar sesión persistente en el navegador aislado
+  return await request('/zoho/login', { method: 'POST' });
+}
+
+
+
+export async function getWhatsAppSafetyStatus() {
+  // Obtiene el estado de cuota diaria y horario seguro de WhatsApp Web
+  return await request('/whatsapp/seguridad/estado');
+}
+
+export async function getLinkedInWarmupStatus() {
+  // Obtiene el estado de la curva de calentamiento y medidor de búsquedas
+  return await request('/linkedin/warmup/estado');
+}
+
+export async function withdrawStaleInvitations(diasLimite = 21) {
+  // Retira en bloque invitaciones antiguas de LinkedIn
+  return await request(`/linkedin/invitaciones-vencidas/retirar?dias_limite=${diasLimite}`, {
+    method: 'POST',
+  });
+}
+
+export async function testEnrichmentDiagnostics(params) {
+  // Diagnóstico en vivo de sintaxis, DNS MX y ping SMTP
+  return await request('/enrichment/test-diagnostico', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
 export async function deleteProspect(prospectId) {
   // Elimina permanentemente un prospecto de la base de datos
   return await request(`/prospectos/${prospectId}`, {
@@ -291,9 +395,14 @@ export async function deleteProspectsBatch(prospectIds) {
   });
 }
 
-export async function importSelectedProspects(leads, listId = null, tenantId = null) {
-  // Guarda únicamente los prospectos seleccionados y los vincula a la lista especificada
-  const body = { leads, lista_id: listId || null };
+export async function importSelectedProspects(leads, listTarget = null, tenantId = null) {
+  // Guarda únicamente los prospectos seleccionados y los vincula a una o varias listas
+  const body = { leads };
+  if (Array.isArray(listTarget)) {
+    body.lista_ids = listTarget;
+  } else if (listTarget) {
+    body.lista_id = listTarget;
+  }
   if (tenantId) body.tenant_id = tenantId;
   return await request('/prospectos/importar-lote', {
     method: 'POST',
@@ -316,6 +425,15 @@ export async function triggerExtraction(searchTerm, page = 1, listId = null, aut
   return await request(`/extraccion/buscar?${params.toString()}`, { method: 'POST' });
 }
 
+export async function extractNetworkLeads(source = 'all', limit = 50, tenantId = null) {
+  // Extrae decisores y contactos desde la red personal de LinkedIn (Conexiones 1º grado o Invitaciones enviadas)
+  const params = new URLSearchParams();
+  params.append('origen', source);
+  params.append('limite', String(limit));
+  if (tenantId) params.append('tenant_id', tenantId);
+  return await request(`/extraccion/red-linkedin?${params.toString()}`, { method: 'POST' });
+}
+
 export async function fetchBrowserStatus() {
   // Consulta si Chromium embebido o BrowserOS está activo y respondiendo
   const res = await request('/browser/estado');
@@ -326,6 +444,8 @@ export async function fetchBrowserStatus() {
     motor: res.motor || 'Inactivo',
     mensaje: res.mensaje,
     sesion_linkedin_activa: Boolean(res.sesion_linkedin_activa),
+    sesion_whatsapp_activa: Boolean(res.sesion_whatsapp_activa),
+    sesion_zoho_activa: Boolean(res.sesion_zoho_activa),
     visible: Boolean(res.visible),
   };
 }
@@ -335,15 +455,25 @@ export async function launchBrowser() {
   return await request('/browser/iniciar', { method: 'POST' });
 }
 
-export async function showWorkBrowser(url = null) {
+export async function showWorkBrowser(url = null, channel = null) {
   // Abre o trae al frente la ventana de Chromium embebido de Electron
-  const query = url ? `?url=${encodeURIComponent(url)}` : '';
+  const params = new URLSearchParams();
+  if (url) params.append('url', url);
+  if (channel) params.append('channel', channel);
+  const query = params.toString() ? `?${params.toString()}` : '';
   return await request(`/browser/mostrar${query}`, { method: 'POST' });
 }
 
-export async function hideWorkBrowser() {
+export async function hideWorkBrowser(channel = null) {
   // Oculta la ventana de Chromium embebido
-  return await request('/browser/ocultar', { method: 'POST' });
+  const query = channel ? `?channel=${encodeURIComponent(channel)}` : '';
+  return await request(`/browser/ocultar${query}`, { method: 'POST' });
+}
+
+
+export async function logoutZoho() {
+  // Cierra sesión en Zoho CRM, purga cookies y restablece el formulario de login
+  return await request('/zoho/logout', { method: 'POST' });
 }
 
 export async function fetchSafetyStatus() {
@@ -361,6 +491,17 @@ export async function toggleCampaign(targetState) {
     return { activa: true, kill_switch: res.kill_switch };
   }
 }
+
+export async function updateSafetyConfig(clave, valor) {
+  return await request(`/seguridad/configuracion?clave=${encodeURIComponent(clave)}&valor=${encodeURIComponent(valor)}`, { method: 'POST' });
+}
+
+export async function syncAcceptedConnections(tenantId = '') {
+  // Sincroniza en bloque las conexiones aceptadas inspeccionando LinkedIn
+  const query = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : '';
+  return await request(`/leads/sincronizar-conexiones${query}`, { method: 'POST' });
+}
+
 
 // ==========================================
 // LISTAS DE LEADS (AUDIENCIAS)
@@ -385,6 +526,79 @@ export async function createLeadList(data) {
       conectar_secuencia_activa: Boolean(data.conectar_secuencia_activa),
       tenant_id: data.tenant_id || undefined,
     }),
+  });
+}
+
+export async function fetchLeadListDetail(listId) {
+  // Consulta la información detallada de una lista con sus prospectos y secuencias
+  return await request(`/listas/${listId}`);
+}
+
+export async function deleteLeadList(listId) {
+  // Elimina una lista de prospectos
+  return await request(`/listas/${listId}`, { method: 'DELETE' });
+}
+
+export async function connectListToSequence(firstId, secondId) {
+  // Vincula una lista de leads a una secuencia (admite tanto (listId, sequenceId) como (sequenceId, listId))
+  let listId = firstId;
+  let sequenceId = secondId;
+  if (typeof firstId === 'string' && (firstId.startsWith('seq-') || firstId.startsWith('sec-') || (typeof secondId === 'string' && (secondId.startsWith('lista-') || secondId.startsWith('list-'))))) {
+    sequenceId = firstId;
+    listId = secondId;
+  }
+  return await request(`/listas/${listId}/conectar-secuencia`, {
+    method: 'POST',
+    body: JSON.stringify({ secuencia_id: sequenceId }),
+  });
+}
+
+export async function disconnectListFromSequence(firstId, secondId) {
+  // Desvincula una lista de leads de una secuencia (admite tanto (listId, sequenceId) como (sequenceId, listId))
+  let listId = firstId;
+  let sequenceId = secondId;
+  if (typeof firstId === 'string' && (firstId.startsWith('seq-') || firstId.startsWith('sec-') || (typeof secondId === 'string' && (secondId.startsWith('lista-') || secondId.startsWith('list-'))))) {
+    sequenceId = firstId;
+    listId = secondId;
+  }
+  return await request(`/listas/${listId}/desconectar-secuencia`, {
+    method: 'POST',
+    body: JSON.stringify({ secuencia_id: sequenceId }),
+  });
+}
+
+export async function removeLeadFromList(listId, leadId) {
+  // Quita un prospecto de una lista específica
+  return await request(`/listas/${listId}/leads/${leadId}`, { method: 'DELETE' });
+}
+
+export async function addLeadsToList(listId, leadIds) {
+  // Incorpora prospectos a una lista existente
+  return await request(`/listas/${listId}/leads`, {
+    method: 'POST',
+    body: JSON.stringify({ lead_ids: leadIds }),
+  });
+}
+
+export async function updateLeadList(listId, data) {
+  // Actualiza metadatos o estado de una lista
+  return await request(`/listas/${listId}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function startListExtraction(listId) {
+  // Inicia la extracción automática con pausas antiban de los leads de una lista
+  return await request(`/listas/${listId}/iniciar-extraccion`, {
+    method: 'POST',
+  });
+}
+
+export async function stopListExtraction(listId) {
+  // Detiene la extracción automática de la lista
+  return await request(`/listas/${listId}/detener-extraccion`, {
+    method: 'POST',
   });
 }
 
@@ -425,19 +639,30 @@ export async function fetchSequences(tenantId = '') {
           };
         });
 
-        // Normalizar los leads asignados para que coincidan con la tabla de la UI
+        // Normalizar los leads asignados para que coincidan con la tabla de la UI preservando todos sus atributos
         const normalizedLeads = (leadsRes.leads || []).map((l) => ({
-          id: l.id || l.lead_id,
+          ...l,
+          id: l.lead_id || l.id,
           lead_id: l.lead_id || l.id,
           nombre: l.nombre,
+          cargo_actual: l.cargo_actual || l.cargo_titular || 'Cargo no especificado',
           institucion: l.institucion_actual || l.institucion || '-',
-          email_directo: l.email || l.email_directo || 'No declarado',
+          institucion_actual: l.institucion_actual || l.institucion || '-',
+          ubicacion: l.ubicacion || 'Chile',
+          email_directo: l.email || l.email_zoho || l.email_extracted || 'No declarado',
           paso_actual: l.paso_orden || l.paso_actual || 1,
           paso_etiqueta: l.paso_etiqueta || l.paso_accion || '',
-          estado_secuencia: l.estado || l.estado_secuencia || 'EN_CURSO',
+          estado_secuencia: (() => {
+            const rawSt = (l.estado || l.estado_secuencia || 'EN_CURSO').toUpperCase();
+            return (rawSt === 'FINALIZADA' || rawSt === 'FINALIZADO') ? 'COMPLETADO' : (l.estado || l.estado_secuencia || 'EN_CURSO');
+          })(),
           perfil_url: l.perfil_url,
           proxima_ejecucion_at: l.proxima_ejecucion_at,
         }));
+
+        const enrolledCompletedCount = normalizedLeads.filter(
+          ld => (ld.estado_secuencia || '').toUpperCase() === 'COMPLETADO'
+        ).length;
 
         const proxLead = merged.proximo_lead
           ? {
@@ -446,20 +671,36 @@ export async function fetchSequences(tenantId = '') {
             }
           : null;
 
+        const rawEstado = (merged.estado || (merged.activa ? 'PUBLICADA' : 'BORRADOR')).toUpperCase();
+        const isPublished = rawEstado === 'PUBLICADA' && Boolean(merged.activa);
+        const isPaused = rawEstado === 'PAUSADA';
+        const estadoNormalizado = isPublished ? 'PUBLICADA' : (isPaused ? 'PAUSADA' : 'BORRADOR');
+
         return {
           ...merged,
-          publicada: Boolean(merged.activa || merged.estado === 'PUBLICADA'),
+          estado: estadoNormalizado,
+          publicada: isPublished,
+          activa: isPublished,
           listas_asociadas: associatedLists,
           listas_conectadas: associatedLists.map(l => l.nombre || l.id),
           leads_inscritos: normalizedLeads,
-          leads_completados_count: merged.total_completados ?? merged.leads_completados ?? 0,
+          leads_completados: Math.max(Number(merged.total_completados ?? merged.leads_completados ?? 0), enrolledCompletedCount),
+          total_completados: Math.max(Number(merged.total_completados ?? merged.leads_completados ?? 0), enrolledCompletedCount),
+          leads_completados_count: Math.max(Number(merged.total_completados ?? merged.leads_completados ?? 0), enrolledCompletedCount),
           candidato_proximo: proxLead,
           pasos: normalizedSteps,
         };
       } catch {
+        const rawEstado = (s.estado || (s.activa ? 'PUBLICADA' : 'BORRADOR')).toUpperCase();
+        const isPublished = rawEstado === 'PUBLICADA' && Boolean(s.activa);
+        const isPaused = rawEstado === 'PAUSADA';
+        const estadoNormalizado = isPublished ? 'PUBLICADA' : (isPaused ? 'PAUSADA' : 'BORRADOR');
+
         return {
           ...s,
-          publicada: Boolean(s.activa || s.estado === 'PUBLICADA'),
+          estado: estadoNormalizado,
+          publicada: isPublished,
+          activa: isPublished,
           listas_asociadas: [],
           listas_conectadas: [],
           leads_inscritos: [],
@@ -496,12 +737,20 @@ export async function deleteSequenceStep(sequenceId, stepId) {
   });
 }
 
+export async function deleteSequence(sequenceId) {
+  // Elimina permanentemente una secuencia, sus pasos asociados y desvincula las listas y prospectos
+  return await request(`/secuencias/${sequenceId}`, {
+    method: 'DELETE',
+  });
+}
+
 export async function createSequence(data) {
-  // Crea una nueva secuencia con su plantilla inicial
+  // Crea una nueva secuencia empezando en estado BORRADOR
   const body = {
     nombre: data.nombre,
     descripcion: data.descripcion || '',
-    activa: data.publicada !== false,
+    activa: Boolean(data.publicada && data.estado === 'PUBLICADA'),
+    estado: data.estado || 'BORRADOR',
     plantilla: data.plantilla || 'multicanal',
   };
   if (data.tenant_id) body.tenant_id = data.tenant_id;
@@ -528,31 +777,34 @@ export async function updateSequence(sequenceId, { pasos, nombre, descripcion })
   return { status: 'ok' };
 }
 
-export async function toggleSequencePublish(sequenceId) {
-  // Publica o pausa una secuencia individual
-  const seq = await request(`/secuencias/${sequenceId}`);
-  const nuevoEstado = (seq.estado === 'PUBLICADA' || seq.activa) ? 'PAUSADA' : 'PUBLICADA';
+export async function changeSequenceStatus(sequenceId, nuevoEstado) {
+  // Modifica el estado explícito de la secuencia ('BORRADOR' | 'PUBLICADA' | 'PAUSADA')
   return await request(`/secuencias/${sequenceId}/estado`, {
     method: 'POST',
     body: JSON.stringify({ estado: nuevoEstado }),
   });
 }
 
-export async function connectListToSequence(sequenceId, listId) {
-  // Vincula una lista de leads a una secuencia
-  return await request(`/listas/${listId}/conectar-secuencia`, {
-    method: 'POST',
-    body: JSON.stringify({ secuencia_id: sequenceId }),
-  });
+export async function toggleSequencePublish(sequenceId, targetEstado = null) {
+  // Publica, pausa o reanuda una secuencia
+  if (targetEstado) {
+    return await changeSequenceStatus(sequenceId, targetEstado);
+  }
+  const seq = await request(`/secuencias/${sequenceId}`);
+  const currentEstado = (seq.estado || (seq.activa ? 'PUBLICADA' : 'BORRADOR')).toUpperCase();
+  let nuevoEstado = 'PUBLICADA';
+  if (currentEstado === 'PUBLICADA') {
+    nuevoEstado = 'PAUSADA';
+  } else if (currentEstado === 'PAUSADA') {
+    nuevoEstado = 'PUBLICADA';
+  } else {
+    // Si era BORRADOR, pasa a PUBLICADA
+    nuevoEstado = 'PUBLICADA';
+  }
+  return await changeSequenceStatus(sequenceId, nuevoEstado);
 }
 
-export async function disconnectListFromSequence(sequenceId, listId) {
-  // Desvincula una lista de leads de una secuencia
-  return await request(`/listas/${listId}/desconectar-secuencia`, {
-    method: 'POST',
-    body: JSON.stringify({ secuencia_id: sequenceId }),
-  });
-}
+
 
 export async function assignEnqueuedLeads(sequenceId) {
   // Inscribe todos los leads actualmente en cola a esta secuencia
@@ -616,6 +868,13 @@ export async function toggleAutopilot(active = null) {
   });
 }
 
+export async function forceWorkerNext() {
+  // Salta la pausa actual y ejecuta la siguiente tarea de inmediato
+  return await request('/worker/forzar-siguiente', {
+    method: 'POST',
+  });
+}
+
 export async function fetchNextTask() {
   // Queries next authorized task from cloud server
   return await request('/worker/proxima-tarea');
@@ -629,8 +888,15 @@ export async function reportTaskResult(data) {
   });
 }
 
-// Backward compatibility aliases
-export const togglePilotoAutomatico = toggleAutopilot;
-export const fetchProximaTarea = fetchNextTask;
-export const reportarTareaResultado = reportTaskResult;
+export async function fetchDashboardMetrics({ tenantId = '', sequenceId = '', listId = '' } = {}) {
+  // Consulta métricas integrales de prospección, KPIs de secuencias y embudo para el Dashboard
+  const params = new URLSearchParams();
+  if (tenantId) params.append('tenant_id', tenantId);
+  if (sequenceId) params.append('secuencia_id', sequenceId);
+  if (listId) params.append('lista_id', listId);
+  const query = params.toString() ? `?${params.toString()}` : '';
+  return await request(`/dashboard/metricas${query}`);
+}
+
+
 

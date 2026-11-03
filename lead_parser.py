@@ -15,6 +15,64 @@ EMPLOYMENT_TYPES = {
     'full-time', 'part-time', 'self-employed', 'freelance', 'contract', 'internship', 'seasonal'
 }
 
+INVALID_ROLES_REGEX = [
+    r'^(?:trabajo\s+en\s+equipo|resoluci[oó]n\s+de\s+problemas|comunicaci[oó]n\s+(?:asertiva|efectiva)|liderazgo\s+de\s+equipos|gesti[oó]n\s+del\s+tiempo|adaptabilidad|empat[ií]a|pensamiento\s+cr[ií]tico|aptitudes?|habilidades?|competencias?)\b',
+    r'^(?:voluntari[oa]|voluntariado|volunteer)\b'
+]
+
+INVALID_INSTITUTIONS_REGEX = [
+    r'^(?:voluntariado|voluntario|voluntaria|volunteer)\b',
+    r'^(?:sin\s+informaci[oó]n|ningun[oa]|no\s+aplica|n/a)\b'
+]
+
+def is_invalid_role(role: str) -> bool:
+    if not role:
+        return True
+    clean = role.strip().lower()
+    return any(re.search(pat, clean, re.IGNORECASE) for pat in INVALID_ROLES_REGEX)
+
+def is_invalid_institution(inst: str) -> bool:
+    if not inst:
+        return True
+    clean = inst.strip().lower()
+    if clean in EMPLOYMENT_TYPES or clean in ["institución escolar", "chile", "empresa u organización", "institución educativa"]:
+        return True
+    return any(re.search(pat, clean, re.IGNORECASE) for pat in INVALID_INSTITUTIONS_REGEX)
+
+def refine_pie_institution(institucion: str, role: str = "", headline: str = "", location: str = "") -> str:
+    """
+    Si la institución es el genérico 'Programa de Integración Escolar' o 'PIE',
+    intenta resolver el colegio real mencionado o la comuna/DAEM correspondiente.
+    """
+    if not institucion:
+        return ""
+    clean_inst = institucion.strip()
+    is_pie = re.search(r'^(?:programa\s+(?:de\s+)?integraci[oó]n\s+escolar|p\.?i\.?e\.?)\b', clean_inst, re.IGNORECASE)
+    if not is_pie:
+        return clean_inst
+
+    combined = f"{role} {headline}".strip()
+    # 1. Buscar si se menciona un colegio o institución educativa específica
+    school_match = re.search(r'\b(Colegio|Liceo|Escuela|Instituto|Jard[ií]n|Universidad|DAEM|SLEP|Fundaci[oó]n)\s+([A-Za-zÁÉÍÓÚáéíóúñÑ0-9\s]+?)(?:\s+(?:en|at|@|–|-|\||•|·|\.|\,|$)|$)', combined, re.IGNORECASE)
+    if school_match:
+        found_school = f"{school_match.group(1)} {school_match.group(2)}".strip()
+        found_school = re.sub(r'[\/|;,\-–—]+$', '', found_school).strip()
+        if len(found_school) > 5 and not re.search(r'integraci[oó]n|escolar', found_school, re.IGNORECASE):
+            return found_school
+
+    # 2. Buscar si la ubicación o descripción aporta una comuna específica
+    commune = ""
+    if location:
+        loc_parts = [p.strip() for p in location.split(',') if p.strip()]
+        if loc_parts:
+            first_loc = loc_parts[0]
+            if first_loc.lower() not in ['chile', 'área metropolitana de santiago', 'gran santiago', 'región metropolitana']:
+                commune = first_loc
+
+    if commune:
+        return f"Programa de Integración Escolar (PIE - {commune})"
+    return "Programa de Integración Escolar (PIE)"
+
 COMMON_TITLES_PREFIX = [
     r'^director[a]?\s+general\b',
     r'^director[a]?\s+ejecutiv[oa]\b',
@@ -65,7 +123,7 @@ def is_fluff_or_academic(text: str) -> bool:
     clean = text.strip().lower()
     return any(re.search(pat, clean, re.IGNORECASE) for pat in ACADEMIC_OR_FLUFF)
 
-def parse_cargo_and_institucion(headline: str, snippet_actual: str = "", default_institucion: str = "") -> Tuple[str, str]:
+def parse_cargo_and_institucion(headline: str, snippet_actual: str = "", default_institucion: str = "", location: str = "") -> Tuple[str, str]:
     """
     Extrae de forma precisa el cargo actual ('cargo_actual') y la institución u organización ('institucion_actual')
     a partir del snippet directo de LinkedIn ('Actual: ...') o del titular / headline del usuario.
@@ -75,7 +133,7 @@ def parse_cargo_and_institucion(headline: str, snippet_actual: str = "", default
     
     cargo_actual = ""
     institucion = (default_institucion or "").strip()
-    if institucion.lower() in EMPLOYMENT_TYPES or institucion in ["Institución Escolar", "Chile", "Empresa u Organización"]:
+    if is_invalid_institution(institucion):
         institucion = ""
 
     # 1. Prioridad: Snippet explícito de LinkedIn: "Actual: Director de Colegio en San Ignacio" o "Current: Managing Director at X"
@@ -84,18 +142,23 @@ def parse_cargo_and_institucion(headline: str, snippet_actual: str = "", default
         if clean_snip and not is_fluff_or_academic(clean_snip):
             if re.search(r'\s+en\s+', clean_snip, re.IGNORECASE):
                 parts = re.split(r'\s+en\s+', clean_snip, maxsplit=1, flags=re.IGNORECASE)
-                cargo_actual = parts[0].strip()
-                if not institucion and len(parts) > 1:
+                cand_role = parts[0].strip()
+                if not is_invalid_role(cand_role):
+                    cargo_actual = cand_role
+                if not institucion and len(parts) > 1 and not is_invalid_institution(parts[1]):
                     institucion = parts[1].strip()
             elif re.search(r'\s+at\s+', clean_snip, re.IGNORECASE):
                 parts = re.split(r'\s+at\s+', clean_snip, maxsplit=1, flags=re.IGNORECASE)
-                cargo_actual = parts[0].strip()
-                if not institucion and len(parts) > 1:
+                cand_role = parts[0].strip()
+                if not is_invalid_role(cand_role):
+                    cargo_actual = cand_role
+                if not institucion and len(parts) > 1 and not is_invalid_institution(parts[1]):
                     institucion = parts[1].strip()
             else:
-                cargo_actual = clean_snip
+                if not is_invalid_role(clean_snip):
+                    cargo_actual = clean_snip
 
-    # 2. Si no hay snippet directo, analizar el titular / headline
+    # 2. Si no hay snippet directo o el cargo extraído no era válido, analizar el titular / headline
     if not cargo_actual and headline:
         # Limpiar emojis o caracteres decorativos iniciales
         clean_head = re.sub(r'^[^\w\s]+', '', headline).strip()
@@ -109,8 +172,8 @@ def parse_cargo_and_institucion(headline: str, snippet_actual: str = "", default
             if len(sub_segs) > 1:
                 segments = sub_segs
 
-        # Descartar segmentos que sean puramente académicos o slogans promocionales
-        viable_segments = [s for s in segments if not is_fluff_or_academic(s)]
+        # Descartar segmentos que sean puramente académicos, slogans o habilidades blandas
+        viable_segments = [s for s in segments if not is_fluff_or_academic(s) and not is_invalid_role(s)]
         if not viable_segments:
             viable_segments = segments
 
@@ -137,7 +200,7 @@ def parse_cargo_and_institucion(headline: str, snippet_actual: str = "", default
             parts = re.split(r'\s+(?:en|at|@)\s+', best_segment, maxsplit=1, flags=re.IGNORECASE)
             cargo_actual = parts[0].strip()
             comp = parts[1].strip()
-            if not institucion and comp:
+            if not institucion and comp and not is_invalid_institution(comp):
                 institucion = comp
         # Caso B: Separador por institución escolar explícita (Colegio, Liceo, Escuela, Universidad, Instituto, etc.)
         else:
@@ -149,26 +212,39 @@ def parse_cargo_and_institucion(headline: str, snippet_actual: str = "", default
                     cargo_actual = best_segment
                 else:
                     cargo_actual = prefix
-                    if not institucion and company_part:
+                    if not institucion and company_part and not is_invalid_institution(company_part):
                         institucion = company_part
             else:
                 cargo_actual = best_segment
 
-    # Limpiezas finales de cargo_actual
+    # 3. Limpiezas especiales de cargo_actual
+    if is_invalid_role(cargo_actual):
+        cargo_actual = ""
+
+    # Si el cargo contiene una frase subordinada como "en Programa de Integración Escolar (P.I.E) colegio Angol"
+    if cargo_actual and re.search(r'\s+en\s+', cargo_actual, re.IGNORECASE):
+        sub_parts = re.split(r'\s+en\s+', cargo_actual, maxsplit=1, flags=re.IGNORECASE)
+        base_role = sub_parts[0].strip()
+        trailing = sub_parts[1].strip()
+        if not is_invalid_role(base_role):
+            if ("pie" in cargo_actual.lower() or "pie" in headline.lower() or "integración escolar" in cargo_actual.lower()) and "pie" not in base_role.lower():
+                cargo_actual = f"{base_role} (PIE)"
+            else:
+                cargo_actual = base_role
+        if not institucion:
+            institucion = trailing
+
+    # Limpiezas finales de puntuación
     cargo_actual = re.sub(r'[\/|;,\-–—]+$', '', cargo_actual).strip()
     cargo_actual = re.sub(r'^[\/|;,\-–—]+', '', cargo_actual).strip()
-    # Eliminar preposiciones colgantes al final
     cargo_actual = re.sub(r'\s+(?:de|del|en|at|para|por)\s*$', '', cargo_actual, flags=re.IGNORECASE).strip()
 
-    # Si aún tiene '/' (ej: General Manager/Business Manager), tomar el primero
     if '/' in cargo_actual and not re.search(r'\b(y|and)\b', cargo_actual):
         cargo_actual = cargo_actual.split('/')[0].strip()
 
-    # Truncado elegante si supera 60 caracteres
     if len(cargo_actual) > 60:
         cargo_actual = cargo_actual[:60].rsplit(' ', 1)[0].strip()
 
-    # Normalizar capitalización si venía todo en minúsculas
     if cargo_actual.islower():
         cargo_actual = cargo_actual.title()
 
@@ -180,8 +256,11 @@ def parse_cargo_and_institucion(headline: str, snippet_actual: str = "", default
 
     institucion = re.sub(r'[|,;·•].*$', '', institucion).strip()
     institucion = re.sub(r'[\/|;,\-–—]+$', '', institucion).strip()
-    if institucion and institucion.lower().strip() in EMPLOYMENT_TYPES:
+    if is_invalid_institution(institucion):
         institucion = ""
+
+    # 4. Refinar instituciones genéricas de tipo 'Programa de Integración Escolar' / 'PIE'
+    institucion = refine_pie_institution(institucion, role=cargo_actual, headline=headline, location=location)
 
     return cargo_actual, institucion
 

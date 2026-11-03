@@ -1,235 +1,414 @@
 #!/usr/bin/env python3
 """
-NexusReach Pro - Script de Migración Automatizado SQLite -> PostgreSQL
-Migra de forma segura todos los registros, esquemas, índices y activa Row-Level Security (RLS).
+Script de Migración Idempotente SQLite a PostgreSQL con Verificación de Conteos y Rollback
+NexusReach Pro Directrices de Ingeniería - TASK-05B-01 [P0]
+
+Mejoras de seguridad implementadas en TASK-05B-01:
+1. Enmascaramiento obligatorio de credenciales en logs y consola (mask_db_url).
+2. Resolución segura de credenciales vía variables de entorno (TARGET_DATABASE_URL, DATABASE_URL, PG*).
+3. Soporte de modo estricto de claves foráneas (--strict-fks) para ejecución con roles sin privilegios SUPERUSER.
+4. Protección ante pérdida accidental de datos en rollback post-cutover (--confirm-data-loss).
+
+Uso seguro recomendado:
+  $env:TARGET_DATABASE_URL = "postgresql://nexus_admin:******@127.0.0.1:5432/nexusreach_test"
+  python scripts/migrate_sqlite_to_postgres.py --source-db leads.db --dry-run
+  python scripts/migrate_sqlite_to_postgres.py --source-db leads.db --migrate
+  python scripts/migrate_sqlite_to_postgres.py --source-db leads.db --verify-only
+  python scripts/migrate_sqlite_to_postgres.py --rollback --confirm-data-loss
 """
 
 import os
 import sys
-import argparse
 import sqlite3
-import json
-from datetime import datetime
-from typing import Dict, Any, List
+import argparse
+import re
+from typing import Dict, List, Tuple, Any, Optional
+
+# Configurar UTF-8 en salida estándar para compatibilidad con Windows consola
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 try:
-    from dotenv import load_dotenv
-    load_dotenv()
+    import database
 except ImportError:
-    pass
+    database = None
 
-try:
-    import psycopg
-    from psycopg.rows import dict_row
-except ImportError:
-    print("[ERROR] Falta el paquete 'psycopg'. Instálalo con: pip install 'psycopg[binary]>=3.2.0'")
-    sys.exit(1)
+DEFAULT_SQLITE_PATH = os.path.join(PROJECT_ROOT, "leads.db")
 
-TABLES_ORDER = [
+# Tablas en orden estricto de dependencias de claves foraneas segun PostgreSQL (Topological sort - 36 tablas)
+MIGRATION_TABLES = [
+    "configuracion_seguridad",
+    "selector_versions",
+    "action_status",
+    "payment_webhook_events",
     "tenants",
     "suscripciones",
+    "subscriptions",
+    "entitlements",
+    "credit_ledger",
+    "usage_counters",
+    "usage_events",
+    "suppression_list",
+    "system_logs",
+    "audit_logs",
+    "selector_failure_logs",
     "usuarios",
-    "configuracion_seguridad",
-    "leads",
+    "devices",
+    "whatsapp_accounts",
+    "linkedin_accounts",
+    "commands",
+    "command_results",
     "listas_leads",
+    "leads",
     "leads_en_lista",
     "secuencias",
     "pasos_secuencia",
-    "leads_en_secuencia",
     "secuencia_listas",
+    "leads_en_secuencia",
     "mensajes_linkedin",
     "correos_electronicos",
+    "mensajes_whatsapp",
     "interacciones_sociales",
     "historial_actividades",
-    "system_logs",
-    "audit_logs"
+    "lead_activity",
+    "consent_records",
+    "email_candidates",
 ]
 
-SERIAL_TABLES = [
-    "mensajes_linkedin",
-    "correos_electronicos",
-    "interacciones_sociales",
-    "historial_actividades",
-    "system_logs",
-    "audit_logs"
-]
+PROTECTED_SYSTEM_TABLES = {
+    "system_admin_keys"
+}
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Migración SQLite a PostgreSQL para NexusReach")
-    parser.add_argument("--source", default="leads.db", help="Ruta al archivo SQLite (defecto: leads.db)")
-    parser.add_argument("--dest", default=os.getenv("DATABASE_URL"), help="Cadena de conexión PostgreSQL (defecto: DATABASE_URL de .env)")
-    parser.add_argument("--schema-file", default="schema_postgres.sql", help="Ruta al archivo DDL de PostgreSQL")
-    parser.add_argument("--dry-run", action="store_true", help="Solo analiza y cuenta registros sin escribir en PostgreSQL")
-    return parser.parse_args()
+# Tenant placeholder para auditoría histórica huérfana en modo strict-fks
+SYSTEM_LEGACY_AUDIT_TENANT_ID = "ten_legacy_audit"
 
-def run_migration():
-    args = parse_args()
-    sqlite_path = os.path.abspath(args.source)
-    pg_url = args.dest
 
-    print("=" * 70)
-    print(" NEXUSREACH PRO - MIGRACIÓN AUTOMATIZADA A POSTGRESQL (CLOUD)")
-    print("=" * 70)
-    print(f"[*] Origen SQLite:      {sqlite_path}")
+def mask_db_url(url: str) -> str:
+    """Enmascara contraseñas en URLs de conexión para prevenir exposición en logs y consola."""
+    if not url:
+        return ""
+    # Patrón: ://user:password@host
+    return re.sub(r"://([^:]+):([^@]+)@", r"://\1:******@", url)
 
-    if not os.path.exists(sqlite_path):
-        print(f"[ERROR] Archivo SQLite no encontrado: {sqlite_path}")
+
+def resolve_target_pg_url(cli_url: Optional[str] = None) -> str:
+    """Resuelve la cadena de conexión priorizando variables de entorno para evitar exposición en historial CLI."""
+    if cli_url and cli_url.strip():
+        if "@" in cli_url and ":" in cli_url.split("@")[0]:
+            print("[ADVERTENCIA DE SEGURIDAD] Ha suministrado credenciales directamente en la línea de comandos.")
+            print("  Se recomienda exportar TARGET_DATABASE_URL o DATABASE_URL para evitar que queden registradas en el historial.")
+        return cli_url.strip()
+
+    env_target = os.getenv("TARGET_DATABASE_URL", "").strip()
+    if env_target:
+        return env_target
+
+    env_db = os.getenv("DATABASE_URL", "").strip()
+    if env_db:
+        return env_db
+
+    # Comprobar variables estándar de PostgreSQL (libpq)
+    pghost = os.getenv("PGHOST", "").strip()
+    pgport = os.getenv("PGPORT", "5432").strip()
+    pguser = os.getenv("PGUSER", "").strip()
+    pgpassword = os.getenv("PGPASSWORD", "").strip()
+    pgdatabase = os.getenv("PGDATABASE", "").strip()
+
+    if pghost and pguser and pgdatabase:
+        auth = f"{pguser}:{pgpassword}@" if pgpassword else f"{pguser}@"
+        return f"postgresql://{auth}{pghost}:{pgport}/{pgdatabase}"
+
+    return ""
+
+
+def get_sqlite_connection(sqlite_path: str) -> sqlite3.Connection:
+    """Abre conexión SQLite en modo estrictamente de solo lectura."""
+    abs_path = os.path.abspath(sqlite_path)
+    if not os.path.exists(abs_path):
+        raise FileNotFoundError(f"No existe el archivo SQLite en: {abs_path}")
+    uri = f"file:{abs_path}?mode=ro"
+    return sqlite3.connect(uri, uri=True)
+
+
+def get_sqlite_table_counts(sqlite_path: str) -> Dict[str, int]:
+    """Obtiene el conteo de filas de todas las tablas en SQLite."""
+    counts = {}
+    conn = get_sqlite_connection(sqlite_path)
+    cur = conn.cursor()
+    try:
+        for table in MIGRATION_TABLES:
+            try:
+                cur.execute(f"SELECT COUNT(*) FROM {table}")
+                counts[table] = cur.fetchone()[0]
+            except sqlite3.OperationalError:
+                counts[table] = 0
+    finally:
+        conn.close()
+    return counts
+
+
+def get_sqlite_data(sqlite_path: str, table: str, strict_fks: bool = False, valid_tenants: Optional[set] = None) -> Tuple[List[str], List[Tuple]]:
+    """Extrae nombres de columnas y filas de una tabla en SQLite con orden seguro y saneamiento de huérfanos."""
+    conn = get_sqlite_connection(sqlite_path)
+    cur = conn.cursor()
+    try:
+        cur.execute(f"PRAGMA table_info({table})")
+        cols = [r[1] for r in cur.fetchall()]
+        if not cols:
+            return [], []
+
+        order_clause = ""
+        if table == "tenants" and "parent_tenant_id" in cols:
+            order_clause = " ORDER BY CASE WHEN parent_tenant_id IS NULL OR parent_tenant_id = '' THEN 0 ELSE 1 END, created_at ASC"
+
+        cur.execute(f"SELECT {', '.join(cols)} FROM {table}{order_clause}")
+        raw_rows = cur.fetchall()
+
+        # En modo strict_fks, para audit_logs si el tenant no existe en tenants, se mapea al placeholder de auditoría
+        if strict_fks and table == "audit_logs" and "tenant_id" in cols and valid_tenants is not None:
+            t_idx = cols.index("tenant_id")
+            sanitized_rows = []
+            for r in raw_rows:
+                r_list = list(r)
+                tid = r_list[t_idx]
+                if tid and tid not in valid_tenants:
+                    r_list[t_idx] = SYSTEM_LEGACY_AUDIT_TENANT_ID
+                sanitized_rows.append(tuple(r_list))
+            return cols, sanitized_rows
+
+        return cols, raw_rows
+    except sqlite3.OperationalError:
+        return [], []
+    finally:
+        conn.close()
+
+
+def setup_superadmin_session(pg_cur, strict_fks: bool = False) -> None:
+    """Configura la sesión PostgreSQL para tener bypass de superadministrador autorizado."""
+    pg_cur.execute("SET LOCAL app.is_super_admin = 'true';")
+    
+    if not strict_fks:
+        # Modo por defecto para carga masiva histórica: desactivar comprobaciones temporales
+        try:
+            pg_cur.execute("SET LOCAL session_replication_role = 'replica';")
+        except Exception:
+            pass
+
+    secret = None
+    if database and hasattr(database, "get_superadmin_rls_secret"):
+        try:
+            secret = database.get_superadmin_rls_secret()
+        except Exception:
+            pass
+
+    if not secret:
+        try:
+            pg_cur.execute("SELECT key_hash FROM system_admin_keys WHERE is_active = TRUE LIMIT 1;")
+            row = pg_cur.fetchone()
+            if row:
+                secret = row[0]
+        except Exception:
+            pass
+
+    if secret:
+        pg_cur.execute("SELECT set_config('app.super_admin_token', %s, true);", (secret,))
+
+
+def ensure_legacy_audit_tenant(pg_cur) -> None:
+    """Crea el tenant placeholder de auditoría del sistema para permitir integridad referencial estricta."""
+    pg_cur.execute("""
+        INSERT INTO tenants (id, razon_social, tipo_tenant, estado, created_at, updated_at)
+        VALUES (%s, 'Sistema - Registros Auditoria Pre-Migracion', 'SISTEMA', 'ACTIVO', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+        ON CONFLICT (id) DO NOTHING;
+    """, (SYSTEM_LEGACY_AUDIT_TENANT_ID,))
+
+
+def migrate_data(sqlite_path: str, pg_url: str, dry_run: bool = False, strict_fks: bool = False) -> Dict[str, Any]:
+    """Ejecuta la migración de SQLite a PostgreSQL de forma transaccional e idempotente."""
+    try:
+        import psycopg
+    except ImportError:
+        raise RuntimeError("Se requiere psycopg para conectar a PostgreSQL. Instalar con: pip install psycopg[binary]")
+
+    sqlite_counts = get_sqlite_table_counts(sqlite_path)
+    total_sqlite_rows = sum(sqlite_counts.values())
+    results = {}
+
+    print(f"\n[INICIO] Proceso de migracion (Dry-run: {dry_run}, Strict-FKs: {strict_fks})")
+    print(f"  Base de origen SQLite: {os.path.abspath(sqlite_path)}")
+    print(f"  Base de destino PostgreSQL: {mask_db_url(pg_url)}")
+    print(f"  Total de tablas a procesar: {len(MIGRATION_TABLES)} (Filas origen: {total_sqlite_rows})")
+
+    # Obtener conjunto de tenants existentes en SQLite para modo strict_fks
+    valid_tenants = set()
+    if strict_fks:
+        sq_conn = get_sqlite_connection(sqlite_path)
+        sq_cur = sq_conn.cursor()
+        sq_cur.execute("SELECT id FROM tenants")
+        valid_tenants = set(r[0] for r in sq_cur.fetchall())
+        valid_tenants.add(SYSTEM_LEGACY_AUDIT_TENANT_ID)
+        sq_conn.close()
+
+    with psycopg.connect(pg_url) as pg_conn:
+        with pg_conn.cursor() as pg_cur:
+            setup_superadmin_session(pg_cur, strict_fks=strict_fks)
+
+            if strict_fks:
+                ensure_legacy_audit_tenant(pg_cur)
+
+            total_inserted = 0
+            for table in MIGRATION_TABLES:
+                cols, rows = get_sqlite_data(sqlite_path, table, strict_fks=strict_fks, valid_tenants=valid_tenants)
+                if not cols or not rows:
+                    results[table] = {"source": 0, "migrated": 0, "status": "EMPTY_OR_SKIPPED"}
+                    continue
+
+                col_names = ", ".join(cols)
+                placeholders = ", ".join(["%s"] * len(cols))
+
+                insert_query = f"""
+                    INSERT INTO {table} ({col_names})
+                    VALUES ({placeholders})
+                    ON CONFLICT DO NOTHING
+                """
+
+                pg_cur.executemany(insert_query, rows)
+                total_inserted += len(rows)
+
+                results[table] = {
+                    "source": len(rows),
+                    "migrated": len(rows) if not dry_run else 0,
+                    "status": "MIGRATED" if not dry_run else "SIMULATED"
+                }
+                print(f"  [OK] Tabla '{table}': {len(rows)} filas preparadas/insertadas.")
+
+            if dry_run:
+                pg_conn.rollback()
+                print(f"\n[DRY RUN COMPLETO] {total_inserted} filas simuladas. Todos los cambios fueron revertidos mediante rollback.")
+            else:
+                pg_conn.commit()
+                print(f"\n[OK] Migracion completada y transacciones confirmadas. ({total_inserted} filas migradas)")
+
+    return results
+
+
+def verify_counts(sqlite_path: str, pg_url: str, strict_fks: bool = False) -> bool:
+    """Compara tabla por tabla los conteos exactos entre SQLite y PostgreSQL."""
+    try:
+        import psycopg
+    except ImportError:
+        raise RuntimeError("Se requiere psycopg para conectar a PostgreSQL.")
+
+    sqlite_counts = get_sqlite_table_counts(sqlite_path)
+    all_match = True
+    total_sq = 0
+    total_pg = 0
+
+    print("\n[VERIFICACION] CONTEOS ENTRE MOTORES:")
+    print(f"{'Tabla':<28} | {'SQLite':<10} | {'PostgreSQL':<10} | {'Estado':<10}")
+    print("-" * 65)
+
+    with psycopg.connect(pg_url) as pg_conn:
+        with pg_conn.cursor() as pg_cur:
+            setup_superadmin_session(pg_cur)
+            for table in MIGRATION_TABLES:
+                sq_c = sqlite_counts.get(table, 0)
+                total_sq += sq_c
+                try:
+                    pg_cur.execute(f"SELECT COUNT(*) FROM {table}")
+                    pg_c = pg_cur.fetchone()[0]
+                    total_pg += pg_c
+                except Exception as e:
+                    pg_c = f"ERR: {e}"
+
+                # En modo strict_fks, tenants puede tener +1 por el placeholder SYSTEM_LEGACY_AUDIT_TENANT_ID
+                is_match = (sq_c == pg_c) if isinstance(pg_c, int) else False
+                if strict_fks and table == "tenants" and isinstance(pg_c, int) and pg_c == sq_c + 1:
+                    is_match = True
+
+                status = "COINCIDE" if is_match else ("VACIAS" if sq_c == 0 and pg_c == 0 else "DIFERENCIA")
+                if not is_match:
+                    all_match = False
+
+                print(f"{table:<28} | {sq_c:<10} | {str(pg_c):<10} | {status:<10}")
+
+    print("-" * 65)
+    print(f"{'TOTAL':<28} | {total_sq:<10} | {total_pg:<10} | {'COINCIDE' if all_match else 'DESCUADRE'}")
+    return all_match
+
+
+def rollback_pg_data(pg_url: str, confirm_data_loss: bool = False) -> None:
+    """Limpia las tablas de negocio en PostgreSQL con protección contra pérdida accidental de datos post-cutover."""
+    try:
+        import psycopg
+    except ImportError:
+        raise RuntimeError("Se requiere psycopg para conectar a PostgreSQL.")
+
+    if not confirm_data_loss:
+        print("\n[BLOQUEO DE SEGURIDAD] El procedimiento de rollback elimina todos los registros de las tablas de negocio en PostgreSQL.")
+        print("  Si el sistema ya recibió escrituras tras el cutover, ejecutar rollback causará PÉRDIDA IRREVERSIBLE DE DATOS.")
+        print("  Para confirmar la reversión voluntaria, especifique el flag: --confirm-data-loss")
         sys.exit(1)
+
+    print("\n[ROLLBACK] Limpiando tablas de negocio en PostgreSQL...")
+    with psycopg.connect(pg_url) as pg_conn:
+        with pg_conn.cursor() as pg_cur:
+            setup_superadmin_session(pg_cur)
+            for table in reversed(MIGRATION_TABLES):
+                if table in PROTECTED_SYSTEM_TABLES:
+                    continue
+                try:
+                    pg_cur.execute(f"TRUNCATE TABLE {table} CASCADE;")
+                    print(f"  [OK] Tabla '{table}' truncada.")
+                except Exception as e:
+                    print(f"  [ERROR] Truncando '{table}': {e}")
+            pg_conn.commit()
+    print("[OK] Rollback completado exitosamente.")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="NexusReach Pro - Migración SQLite a PostgreSQL con verificación y rollback.")
+    parser.add_argument("--source-db", default=DEFAULT_SQLITE_PATH, help="Ruta al archivo leads.db SQLite.")
+    parser.add_argument("--target-url", default=None, help="Cadena de conexión PostgreSQL (preferir TARGET_DATABASE_URL en entorno).")
+    parser.add_argument("--dry-run", action="store_true", help="Simula la migración sin persistir en PostgreSQL.")
+    parser.add_argument("--migrate", action="store_true", help="Ejecuta la migración de datos y confirma.")
+    parser.add_argument("--verify-only", action="store_true", help="Compara conteos entre SQLite y PostgreSQL.")
+    parser.add_argument("--rollback", action="store_true", help="Elimina los datos de negocio en PostgreSQL (requiere --confirm-data-loss).")
+    parser.add_argument("--confirm-data-loss", action="store_true", help="Confirma explícitamente la purga de datos en rollback.")
+    parser.add_argument("--strict-fks", action="store_true", help="Aplica validación estricta de FKs sin session_replication_role=replica.")
+
+    args = parser.parse_args()
+
+    pg_url = resolve_target_pg_url(args.target_url)
 
     if not pg_url:
-        print("[ERROR] No se especificó la cadena de conexión de PostgreSQL.")
-        print("        Pasa el argumento --dest 'postgresql://...' o configura DATABASE_URL en tu archivo .env")
+        print("[ERROR CRÍTICO] No se especificó --target-url ni están configuradas TARGET_DATABASE_URL / DATABASE_URL.")
+        print("  Configure: $env:TARGET_DATABASE_URL = 'postgresql://usuario:pass@host:5432/db'")
         sys.exit(1)
 
-    # Ocultar contraseña en el log
-    masked_url = pg_url
-    if "@" in masked_url and ":" in masked_url:
-        parts = masked_url.split("@")
-        cred_parts = parts[0].split(":")
-        if len(cred_parts) >= 3:
-            masked_url = f"{cred_parts[0]}:{cred_parts[1]}:****@{parts[1]}"
-    print(f"[*] Destino PostgreSQL: {masked_url}")
-    print(f"[*] Modo de ejecución:  {'DRY-RUN (Simulación)' if args.dry_run else 'MIGRACIÓN REAL'}")
-    print("-" * 70)
+    if args.rollback:
+        rollback_pg_data(pg_url, confirm_data_loss=args.confirm_data_loss)
+    elif args.verify_only:
+        match = verify_counts(args.source_db, pg_url, strict_fks=args.strict_fks)
+        sys.exit(0 if match else 1)
+    elif args.migrate:
+        migrate_data(args.source_db, pg_url, dry_run=False, strict_fks=args.strict_fks)
+        match = verify_counts(args.source_db, pg_url, strict_fks=args.strict_fks)
+        sys.exit(0 if match else 1)
+    elif args.dry_run:
+        migrate_data(args.source_db, pg_url, dry_run=True, strict_fks=args.strict_fks)
+    else:
+        parser.print_help()
 
-    # 1. Conexión a SQLite
-    sqlite_conn = sqlite3.connect(sqlite_path)
-    sqlite_conn.row_factory = sqlite3.Row
-    sqlite_cur = sqlite_conn.cursor()
-
-    # 2. Conexión a PostgreSQL
-    try:
-        pg_conn = psycopg.connect(pg_url, autocommit=False)
-        pg_cur = pg_conn.cursor(row_factory=dict_row)
-        print("[+] Conexión a PostgreSQL establecida exitosamente.")
-    except Exception as e:
-        print(f"[ERROR] No se pudo conectar a PostgreSQL: {e}")
-        sys.exit(1)
-
-    # 3. Aplicar esquema DDL en PostgreSQL
-    if not args.dry_run:
-        schema_path = os.path.abspath(args.schema_file)
-        if os.path.exists(schema_path):
-            print(f"[*] Aplicando esquema DDL y políticas RLS desde {schema_path}...")
-            with open(schema_path, "r", encoding="utf-8") as f:
-                schema_sql = f.read()
-            try:
-                # Desactivar temporalmente RLS para la carga de datos masiva como superuser/admin
-                pg_cur.execute("SET app.is_super_admin = 'true';")
-                pg_cur.execute(schema_sql)
-                pg_conn.commit()
-                print("[+] Esquema, tablas, índices y políticas RLS creados con éxito.")
-            except Exception as e:
-                pg_conn.rollback()
-                print(f"[ERROR] Error aplicando esquema PostgreSQL: {e}")
-                sys.exit(1)
-        else:
-            print(f"[AVISO] Archivo de esquema {schema_path} no encontrado. Se asume que el esquema ya existe.")
-
-    # 4. Migración tabla por tabla
-    print("\n" + "=" * 70)
-    print(f"{'TABLA':<26} | {'ORIGEN (SQLITE)':<18} | {'MIGRADOS (POSTGRES)':<18}")
-    print("-" * 70)
-
-    total_migrated = 0
-    for table in TABLES_ORDER:
-        # Verificar si la tabla existe en SQLite
-        sqlite_cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
-        if not sqlite_cur.fetchone():
-            print(f"{table:<26} | {'(No existe)':<18} | {'-':<18}")
-            continue
-
-        # Obtener columnas de SQLite
-        sqlite_cur.execute(f"PRAGMA table_info({table})")
-        cols_info = sqlite_cur.fetchall()
-        col_names = [r["name"] for r in cols_info]
-
-        # Leer registros de SQLite
-        sqlite_cur.execute(f"SELECT * FROM {table}")
-        rows = sqlite_cur.fetchall()
-        count_src = len(rows)
-
-        if count_src == 0:
-            print(f"{table:<26} | {count_src:<18} | {0:<18}")
-            continue
-
-        if args.dry_run:
-            print(f"{table:<26} | {count_src:<18} | {'(Simulado)':<18}")
-            total_migrated += count_src
-            continue
-
-        # Obtener columnas existentes en PostgreSQL para evitar errores por desalineación
-        pg_cur.execute("""
-            SELECT column_name 
-            FROM information_schema.columns 
-            WHERE table_schema = 'public' AND table_name = %s
-        """, (table,))
-        pg_cols = {r["column_name"] for r in pg_cur.fetchall()}
-
-        # Filtrar solo columnas presentes en ambos lados
-        valid_cols = [c for c in col_names if c in pg_cols]
-        if not valid_cols:
-            print(f"{table:<26} | {count_src:<18} | {'(Sin columnas compatibles)':<18}")
-            continue
-
-        cols_str = ", ".join(valid_cols)
-        placeholders = ", ".join(["%s"] * len(valid_cols))
-        insert_sql = f"INSERT INTO {table} ({cols_str}) VALUES ({placeholders}) ON CONFLICT DO NOTHING"
-
-        inserted_count = 0
-        try:
-            for r in rows:
-                val_list = []
-                for c in valid_cols:
-                    v = r[c]
-                    val_list.append(v)
-                pg_cur.execute(insert_sql, val_list)
-                inserted_count += pg_cur.rowcount if pg_cur.rowcount > 0 else 0
-
-            # Ajustar la secuencia de PostgreSQL para tablas con IDs autoincrementales
-            if table in SERIAL_TABLES:
-                try:
-                    pg_cur.execute(f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), coalesce((SELECT MAX(id) FROM {table}), 1))")
-                except Exception:
-                    pass
-
-            pg_conn.commit()
-            print(f"{table:<26} | {count_src:<18} | {inserted_count:<18}")
-            total_migrated += inserted_count
-        except Exception as e:
-            pg_conn.rollback()
-            print(f"{table:<26} | {count_src:<18} | ERROR: {str(e)[:25]}...")
-
-    # 5. Verificación final y prueba de RLS
-    print("-" * 70)
-    print(f"[*] Total de registros procesados: {total_migrated}")
-
-    if not args.dry_run:
-        print("\n[*] Validando funcionamiento de Row-Level Security (RLS)...")
-        try:
-            # Prueba 1: Modo Super Admin (debe ver todos los leads)
-            pg_cur.execute("SET app.is_super_admin = 'true';")
-            pg_cur.execute("SELECT COUNT(*) as total FROM leads")
-            all_leads = pg_cur.fetchone()["total"]
-
-            # Prueba 2: Modo Tenant Gabriel (debe ver solo los leads de Gabriel)
-            pg_cur.execute("SET app.is_super_admin = 'false';")
-            pg_cur.execute("SET app.current_tenant_id = 'ten_61fb00e3c9';")
-            pg_cur.execute("SELECT COUNT(*) as total FROM leads")
-            gabriel_leads = pg_cur.fetchone()["total"]
-
-            print(f"[+] Prueba RLS superada:")
-            print(f"    - Visibilidad Super Admin: {all_leads} leads globales.")
-            print(f"    - Visibilidad Tenant Gabriel: {gabriel_leads} leads aislados.")
-            print("[+] La base de datos en PostgreSQL está 100% blindada contra Tenant Bleed.")
-        except Exception as e:
-            print(f"[!] Aviso al probar RLS: {e}")
-
-    sqlite_conn.close()
-    pg_conn.close()
-    print("=" * 70)
-    print("[✓] MIGRACIÓN FINALIZADA CON ÉXITO.")
-    print("=" * 70)
 
 if __name__ == "__main__":
-    run_migration()
+    main()

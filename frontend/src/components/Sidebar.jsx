@@ -4,32 +4,46 @@ import {
   ListFilter, 
   GitFork, 
   Terminal, 
-  Power, 
-  CheckCircle2, 
-  Key, 
-  Eye, 
-  Zap, 
-  Sparkles, 
+  ShieldCheck, 
+  LayoutDashboard, 
+  Search, 
+  LogOut,
   Building2,
   Briefcase,
-  ShieldCheck,
   Home,
   UserPlus,
-  LogOut
+  Eye,
+  MessageSquare
 } from 'lucide-react';
 
 export default function Sidebar({
   activeTab,
   setActiveTab,
+  totalLeadsCount = 0,
   listsCount = 0,
   sequencesCount = 0,
   logsCount = 0,
   isExtracting = false,
   linkedinSessionActive = false,
+  whatsappSessionActive = false,
+  zohoSessionActive = false,
   campaignActive = true,
   onToggleCampaign,
   onLoginLinkedin,
+  onLoginWhatsApp,
+  onLoginZoho,
+  onOpenLinkedin,
+  onOpenWhatsApp,
+  onOpenZoho,
+  onLogoutZoho = null,
   onViewBrowser,
+  antibanConfig = {
+    horario_laboral_activo: true,
+    pausas_antiban_activas: true,
+    limites_diarios_activos: true,
+  },
+  onToggleAntiban = null,
+  onOpenAntibanSettings = null,
   currentUser = null,
   selectedWorkspaceTenantId = '',
   selectedWorkspaceName = '',
@@ -41,322 +55,239 @@ export default function Sidebar({
 }) {
   const isSuperAdmin = currentUser?.rol === 'SUPER_ADMIN';
   const isAgencyAdmin = currentUser?.rol === 'AGENCY_ADMIN';
-  const isSubClient = currentUser?.rol === 'COMPANY_MEMBER' || Boolean(currentUser?.tenant?.parent_tenant_id);
   const isInTenantWorkspace = Boolean(selectedWorkspaceTenantId);
   const showProspectingControls = !(isSuperAdmin && !isInTenantWorkspace);
 
-  // Definición de ítems según rol y contexto de workspace
-  const navItems = [];
+  const allAntibanActive = Boolean(
+    antibanConfig?.horario_laboral_activo &&
+    antibanConfig?.pausas_antiban_activas &&
+    antibanConfig?.limites_diarios_activos
+  );
 
-  if (isSuperAdmin) {
-    if (isInTenantWorkspace) {
-      navItems.push({
-        id: 'super_admin',
-        label: '← Volver al Inicio',
-        icon: Home,
-        badge: null
-      });
-      navItems.push(
-        { 
-          id: 'prospectos', 
-          label: 'Prospectos', 
-          icon: Users, 
-          badge: null,
-          desc: `Directorio de ${selectedWorkspaceName || 'este workspace'}`
-        },
-        { 
-          id: 'listas', 
-          label: 'Listas de Leads', 
-          icon: ListFilter, 
-          badge: listsCount,
-          desc: 'Audiencias del workspace'
-        },
-        { 
-          id: 'secuencias', 
-          label: 'Secuencias', 
-          icon: GitFork, 
-          badge: sequencesCount,
-          desc: 'Flujos del workspace'
-        }
-      );
-    } else {
-      navItems.push(
-        {
-          id: 'super_admin',
-          label: 'Inicio',
-          icon: Home,
-          badge: null
-        },
-        {
-          id: 'admin_clientes',
-          label: 'Clientes',
-          icon: Users,
-          badge: null
-        },
-        {
-          id: 'admin_crear_cuenta',
-          label: 'Crear Cuenta',
-          icon: UserPlus,
-          badge: null
-        }
-      );
-    }
+  // Grupos de navegación organizados semánticamente
+  const groups = [];
+
+  if (isSuperAdmin && !isInTenantWorkspace) {
+    groups.push({
+      title: 'Administración',
+      items: [
+        { id: 'super_admin', label: 'Plataforma', icon: Home, badge: null },
+        { id: 'admin_clientes', label: 'Clientes', icon: Users, badge: null },
+        { id: 'admin_crear_cuenta', label: 'Crear cuenta', icon: UserPlus, badge: null },
+      ]
+    });
   } else {
-    // Para Agencias y Miembros Operadores
-    if (isAgencyAdmin) {
-      navItems.push({
-        id: 'agency_portal',
-        label: 'Portal Agencia',
-        icon: Briefcase,
-        badge: 'ROI',
-        desc: 'Bolsa de seats y cartera de clientes'
+    // Modo Operador / Empresa / Workspace
+    const prospectingItems = [
+      { id: 'prospectos', label: 'Búsqueda', icon: Search, badge: null },
+      { id: 'leads_directorio', label: 'Directorio', icon: Users, badge: totalLeadsCount || null },
+      { id: 'listas', label: 'Listas', icon: ListFilter, badge: listsCount || null },
+    ];
+
+    const automationItems = [
+      { id: 'secuencias', label: 'Secuencias', icon: GitFork, badge: sequencesCount || null },
+      { id: 'dashboard', label: 'Métricas', icon: LayoutDashboard, badge: null },
+    ];
+
+    const systemItems = [
+      { id: 'antiban', label: 'Seguridad', icon: ShieldCheck, badge: allAntibanActive ? 'ok' : 'alerta' },
+      { id: 'logs', label: 'Actividad', icon: Terminal, badge: isExtracting ? 'vivo' : logsCount || null },
+    ];
+
+    if (isAgencyAdmin && !isInTenantWorkspace) {
+      groups.push({
+        title: 'Agencia',
+        items: [
+          { id: 'agency_portal', label: 'Portal clientes', icon: Briefcase, badge: 'seats' }
+        ]
       });
     }
 
-    navItems.push(
-      { 
-        id: 'prospectos', 
-        label: 'Prospectos', 
-        icon: Users, 
-        badge: null,
-        desc: 'Búsqueda y extracción'
-      },
-      { 
-        id: 'listas', 
-        label: 'Listas de Leads', 
-        icon: ListFilter, 
-        badge: listsCount,
-        desc: 'Audiencias y segmentos'
-      },
-      { 
-        id: 'secuencias', 
-        label: 'Secuencias', 
-        icon: GitFork, 
-        badge: sequencesCount,
-        desc: 'Flujos multicanal'
-      },
-      { 
-        id: 'logs', 
-        label: 'Logs y Actividad', 
-        icon: Terminal, 
-        badge: isExtracting ? '● VIVO' : logsCount,
-        isPulse: isExtracting,
-        desc: 'Auditoría en tiempo real'
-      }
+    groups.push(
+      { title: 'Prospección', items: prospectingItems },
+      { title: 'Automatización', items: automationItems },
+      { title: 'Sistema', items: systemItems }
     );
   }
 
   return (
-    <aside className="w-64 h-screen sticky top-0 bg-[#0D0E12] border-r border-white/[0.06] flex flex-col justify-between shrink-0 select-none z-30">
-      {/* 1. Header de Marca (NexusReach Pro) */}
-      <div>
-        <div className="p-3.5 border-b border-white/[0.06] flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-md bg-zinc-900 border border-zinc-700/70 flex items-center justify-center text-zinc-200 font-semibold text-[11px] tracking-wider shrink-0 shadow-xs">
+    <aside className="w-[216px] h-screen sticky top-0 bg-[#0E0F12] border-r border-[#22252B] flex flex-col shrink-0 select-none z-30">
+      
+      {/* 1. Cabecera Minimalista de Marca */}
+      <div className="h-11 px-3.5 border-b border-[#22252B] flex items-center justify-between">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="w-5 h-5 rounded bg-zinc-800 border border-zinc-700/60 flex items-center justify-center text-[10px] font-semibold text-zinc-200 tracking-tight shrink-0">
             NR
           </div>
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5 leading-none">
-              <span className="font-medium text-[13px] tracking-tight text-zinc-100">NexusReach</span>
-              <span className="text-[9px] px-1.5 py-0.5 rounded font-mono font-medium bg-zinc-800 text-zinc-400 border border-zinc-700/50">
-                PRO
-              </span>
-            </div>
-            <p className="text-[11px] text-zinc-500 leading-none mt-1 truncate">
-              {currentUser?.tenant?.razon_social || 'Suite de Prospección B2B'}
-            </p>
-          </div>
+          <span className="font-medium text-[13px] tracking-tight text-[#F1F3F5] truncate">
+            NexusReach
+          </span>
         </div>
-
-        {/* Selector de Workspace para Agencia */}
-        {isAgencyAdmin && agencyClients.length > 0 && (
-          <div className="mx-2.5 mt-2.5 p-2 rounded-lg bg-zinc-900/70 border border-white/[0.08] space-y-1">
-            <div className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wider text-zinc-400">
-              <Briefcase className="w-3 h-3 text-zinc-400" />
-              <span>Workspace Activo</span>
-            </div>
-            <select
-              value={selectedWorkspaceTenantId}
-              onChange={(e) => onSelectWorkspace && onSelectWorkspace(e.target.value)}
-              className="w-full bg-[#0D0E12] border border-white/[0.08] rounded px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500 cursor-pointer"
-            >
-              <option value="" className="bg-zinc-950 text-zinc-100">🏢 Sede Agencia (Propia)</option>
-              {agencyClients.map((c) => (
-                <option key={c.id} value={c.id} className="bg-zinc-950 text-zinc-100">
-                  📁 {c.razon_social}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        {/* Banner de Workspace para Super Admin cuando opera en una organización */}
-        {isSuperAdmin && selectedWorkspaceTenantId && (
-          <div className="mx-2.5 mt-2.5 p-2 rounded-lg bg-zinc-900/80 border border-white/[0.08] text-xs text-zinc-300 flex items-center justify-between gap-1.5">
-            <div className="min-w-0">
-              <div className="text-[10px] uppercase font-mono text-zinc-500 flex items-center gap-1">
-                <Building2 className="w-3 h-3 text-zinc-400" />
-                <span>Workspace:</span>
-              </div>
-              <div className="truncate font-medium text-xs text-zinc-200">
-                {selectedWorkspaceName || selectedWorkspaceTenantId}
-              </div>
-            </div>
-            {onExitWorkspace && (
-              <button
-                onClick={onExitWorkspace}
-                className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[10px] font-medium transition cursor-pointer shrink-0"
-                title="Volver a la Consola Master"
-              >
-                ← Salir
-              </button>
-            )}
-          </div>
-        )}
-
-        {/* 2. Menú de Navegación Vertical */}
-        <div className="p-2.5 space-y-0.5">
-          <div className="px-2.5 pt-2 pb-1.5 text-[10px] font-medium uppercase tracking-wider text-zinc-500">
-            Módulos
-          </div>
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = activeTab === item.id;
-            return (
-              <button
-                key={item.id}
-                onClick={() => {
-                  if (item.id === 'super_admin' && isInTenantWorkspace && onExitWorkspace) {
-                    onExitWorkspace();
-                  } else {
-                    setActiveTab(item.id);
-                  }
-                }}
-                className={`w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-xs transition-colors duration-100 cursor-pointer ${
-                  isActive
-                    ? 'bg-zinc-800/70 text-zinc-100 border border-white/[0.08] font-medium shadow-xs'
-                    : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/30 border border-transparent font-normal'
-                }`}
-              >
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <Icon className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-zinc-100' : 'text-zinc-400'}`} />
-                  <span className="truncate">{item.label}</span>
-                </div>
-                {item.badge !== null && (
-                  <span
-                    className={`text-[10px] px-1.5 py-0.2 rounded font-mono shrink-0 ${
-                      item.isPulse
-                        ? 'bg-emerald-950/40 text-emerald-400 border border-emerald-500/30 font-medium'
-                        : isActive
-                        ? 'bg-zinc-700/80 text-zinc-200'
-                        : 'bg-zinc-800/60 text-zinc-500 border border-zinc-800'
-                    }`}
-                  >
-                    {item.badge}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
+        <span className="text-[10px] font-mono text-zinc-500 bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-800">
+          pro
+        </span>
       </div>
 
-      {/* 3. Dock Inferior: Conexión de LinkedIn & Control de Campaña (Oculto en Consola Master) */}
-      <div className="p-2.5 border-t border-white/[0.06] space-y-2 bg-[#0D0E12]">
-        {showProspectingControls ? (
-          <>
-            {/* Estado de LinkedIn */}
-            {linkedinSessionActive ? (
-              <div className="p-2.5 rounded-lg bg-zinc-900/60 border border-white/[0.06] space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5 text-xs text-zinc-300 font-normal">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0 animate-subtle-dot" />
-                    <span className="font-mono text-[11px] text-zinc-300">LinkedIn Conectado</span>
-                  </div>
-                </div>
+      {/* 2. Banner de Workspace contextual (si aplica) */}
+      {selectedWorkspaceTenantId && (
+        <div className="mx-2 mt-2 px-2.5 py-1.5 rounded bg-[#14161A] border border-[#22252B] flex items-center justify-between text-xs">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <Building2 className="w-3 h-3 text-zinc-400 shrink-0" />
+            <span className="text-[11px] text-zinc-300 font-medium truncate">
+              {selectedWorkspaceName || selectedWorkspaceTenantId}
+            </span>
+          </div>
+          {onExitWorkspace && (
+            <button
+              onClick={onExitWorkspace}
+              className="text-[10px] text-zinc-400 hover:text-white px-1 py-0.5 rounded hover:bg-zinc-800 transition"
+              title="Volver al espacio principal"
+            >
+              Salir
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* 3. Menú de Navegación Vertical */}
+      <div className="flex-1 overflow-y-auto px-2 py-3 space-y-4">
+        {groups.map((group, gIdx) => (
+          <div key={gIdx} className="space-y-0.5">
+            <div className="px-2 pb-1 text-[10px] font-medium text-zinc-500 tracking-wider">
+              {group.title}
+            </div>
+            {group.items.map((item) => {
+              const Icon = item.icon;
+              const isActive = activeTab === item.id;
+              return (
                 <button
-                  onClick={onViewBrowser}
-                  className="w-full flex items-center justify-center gap-1.5 py-1 px-2 rounded-md bg-zinc-800/60 hover:bg-zinc-700/60 border border-zinc-700/40 text-[11px] text-zinc-300 transition cursor-pointer"
-                  title="Ver ventana de trabajo en Chromium"
+                  key={item.id}
+                  onClick={() => setActiveTab(item.id)}
+                  className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-[13px] transition duration-100 cursor-pointer ${
+                    isActive
+                      ? 'bg-white/[0.08] text-white font-medium'
+                      : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.03]'
+                  }`}
                 >
-                  <Eye className="w-3 h-3 text-zinc-400" />
-                  <span>Ver Navegador</span>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Icon className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-white' : 'text-zinc-400'}`} />
+                    <span className="truncate">{item.label}</span>
+                  </div>
+
+                  {item.badge !== null && (
+                    <span
+                      className={`text-[10px] font-mono px-1.5 py-0.5 rounded-sm shrink-0 leading-none ${
+                        item.badge === 'alerta'
+                          ? 'bg-amber-950/40 text-amber-400 border border-amber-600/30'
+                          : item.badge === 'vivo'
+                          ? 'bg-emerald-950/40 text-emerald-400 border border-emerald-600/30 animate-status-pulse'
+                          : isActive
+                          ? 'bg-white/[0.1] text-zinc-200'
+                          : 'text-zinc-500'
+                      }`}
+                    >
+                      {item.badge}
+                    </span>
+                  )}
                 </button>
-              </div>
-            ) : (
+              );
+            })}
+          </div>
+        ))}
+      </div>
+
+      {/* 4. Dock Inferior de Canales (LinkedIn, WhatsApp, Zoho) */}
+      {showProspectingControls && (
+        <div className="p-2 border-t border-[#22252B] bg-[#0E0F12]">
+          <div className="px-1.5 pb-1 flex items-center justify-between text-[10px] text-zinc-500 font-medium">
+            <span>Canales de prospección</span>
+            {onViewBrowser && (
               <button
-                onClick={onLoginLinkedin}
-                className="w-full flex items-center justify-center gap-2 p-2 rounded-lg bg-zinc-800/80 hover:bg-zinc-700 text-zinc-200 border border-zinc-700/60 text-xs font-medium transition cursor-pointer"
-                title="Abre la ventana para iniciar sesión en tu cuenta de LinkedIn"
+                onClick={onViewBrowser}
+                className="text-zinc-500 hover:text-zinc-300 transition cursor-pointer"
+                title="Ver navegador de fondo"
               >
-                <Key className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
-                <span>Conectar LinkedIn</span>
+                <Eye className="w-3 h-3" />
               </button>
             )}
+          </div>
 
-            {/* Interruptor Global de Campaña */}
+          <div className="grid grid-cols-3 gap-1">
+            {/* LinkedIn */}
             <button
-              onClick={onToggleCampaign}
-              className={`w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-xs font-medium border transition cursor-pointer ${
-                campaignActive
-                  ? 'bg-zinc-900/80 text-zinc-200 border-white/[0.08] hover:bg-zinc-800/60'
-                  : 'bg-zinc-900/40 text-zinc-400 border-zinc-800 hover:text-zinc-200 hover:bg-zinc-800/40'
+              onClick={onOpenLinkedin || onLoginLinkedin}
+              className={`flex items-center justify-center gap-1.5 py-1.5 px-1 rounded border text-[11px] font-medium transition cursor-pointer ${
+                linkedinSessionActive
+                  ? 'bg-sky-950/30 border-sky-800/40 text-sky-300 hover:bg-sky-900/40'
+                  : 'bg-[#14161A] border-[#22252B] text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
               }`}
-              title="Activa o pausa todas las secuencias y envíos"
+              title={linkedinSessionActive ? 'LinkedIn activo (click para abrir ventana)' : 'Conectar cuenta de LinkedIn'}
             >
-              <div className="flex items-center gap-2">
-                <Power className={`w-3.5 h-3.5 ${campaignActive ? 'text-emerald-400' : 'text-zinc-500'}`} />
-                <span>Campaña</span>
-              </div>
-              <div className="flex items-center gap-1.5 font-mono text-[10px]">
-                <span className={`w-1.5 h-1.5 rounded-full ${campaignActive ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
-                <span className="text-zinc-400">{campaignActive ? 'ACTIVA' : 'PAUSADA'}</span>
-              </div>
-            </button>
-          </>
-        ) : null}
-
-        {/* Versión sutil de la app */}
-        <div className="text-center pt-0.5">
-          <span className="text-[10px] text-zinc-600 font-mono tracking-tight">NexusReach Pro v1.0 &bull; Local IP</span>
-        </div>
-
-        {/* 4. Perfil de Usuario y Logout */}
-        {currentUser && (
-          <div className="pt-2 border-t border-white/[0.06] flex items-center justify-between gap-1.5">
-            <button
-              onClick={onOpenSubscriptionModal}
-              title="Ver detalles de tu suscripción y cuenta"
-              className="flex items-center gap-2 min-w-0 flex-1 p-1.5 rounded-lg hover:bg-zinc-850 transition cursor-pointer text-left group"
-            >
-              <div className="w-7 h-7 rounded-full bg-zinc-800 border border-zinc-700/80 flex items-center justify-center text-xs font-semibold text-zinc-200 shrink-0 group-hover:border-zinc-500 transition shadow-xs">
-                {currentUser.nombre ? currentUser.nombre.substring(0, 2).toUpperCase() : 'US'}
-              </div>
-              <div className="min-w-0 leading-tight">
-                <div className="text-xs font-medium text-zinc-200 truncate group-hover:text-white transition">
-                  {currentUser.nombre || 'Usuario'}
-                </div>
-                <div className="text-[10px] font-mono text-zinc-500 truncate mt-0.5">
-                  {isSuperAdmin 
-                    ? 'Master Root' 
-                    : isAgencyAdmin 
-                    ? 'Agencia Admin' 
-                    : isSubClient 
-                    ? (currentUser.tenant?.razon_social || 'Operador')
-                    : `Plan ${currentUser.suscripcion?.plan || 'Pro'}`}
-                </div>
-              </div>
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${linkedinSessionActive ? 'bg-sky-400' : 'bg-zinc-600'}`} />
+              <span className="truncate">LinkedIn</span>
             </button>
 
+            {/* WhatsApp */}
             <button
-              onClick={onLogout}
-              title="Cerrar sesión"
-              className="p-1.5 rounded-lg bg-zinc-900/60 hover:bg-rose-950/40 hover:text-rose-400 border border-white/[0.06] hover:border-rose-500/30 text-zinc-400 transition cursor-pointer shrink-0"
+              onClick={onOpenWhatsApp || onLoginWhatsApp}
+              className={`flex items-center justify-center gap-1.5 py-1.5 px-1 rounded border text-[11px] font-medium transition cursor-pointer ${
+                whatsappSessionActive
+                  ? 'bg-emerald-950/30 border-emerald-800/40 text-emerald-300 hover:bg-emerald-900/40'
+                  : 'bg-[#14161A] border-[#22252B] text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
+              }`}
+              title={whatsappSessionActive ? 'WhatsApp Web activo' : 'Vincular WhatsApp mediante código QR'}
             >
-              <LogOut className="w-3.5 h-3.5" />
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${whatsappSessionActive ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
+              <span className="truncate">WhatsApp</span>
+            </button>
+
+            {/* Zoho */}
+            <button
+              onClick={zohoSessionActive ? onOpenZoho : (onLoginZoho || onOpenZoho)}
+              className={`flex items-center justify-center gap-1.5 py-1.5 px-1 rounded border text-[11px] font-medium transition cursor-pointer ${
+                zohoSessionActive
+                  ? 'bg-amber-950/30 border-amber-800/40 text-amber-300 hover:bg-amber-900/40'
+                  : 'bg-[#14161A] border-[#22252B] text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
+              }`}
+              title={zohoSessionActive ? 'Zoho CRM sincronizado' : 'Conectar cuenta de Zoho CRM'}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${zohoSessionActive ? 'bg-amber-400' : 'bg-zinc-600'}`} />
+              <span className="truncate">Zoho</span>
             </button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
+
+      {/* 5. Perfil de Usuario y Logout */}
+      {currentUser && (
+        <div className="p-2 border-t border-[#22252B] flex items-center justify-between gap-1.5 bg-[#0E0F12]">
+          <button
+            onClick={onOpenSubscriptionModal}
+            className="flex items-center gap-2 min-w-0 flex-1 p-1 rounded hover:bg-white/[0.04] transition cursor-pointer text-left"
+            title="Ver detalles de la cuenta y suscripción"
+          >
+            <div className="w-6 h-6 rounded-full bg-zinc-800 border border-zinc-700 flex items-center justify-center text-[10px] font-semibold text-zinc-300 shrink-0">
+              {currentUser.nombre ? currentUser.nombre.substring(0, 2).toUpperCase() : 'US'}
+            </div>
+            <div className="min-w-0 leading-tight">
+              <div className="text-xs text-zinc-200 font-medium truncate">
+                {currentUser.nombre || 'Usuario'}
+              </div>
+              <div className="text-[10px] text-zinc-500 truncate">
+                {isSuperAdmin ? 'Superadmin' : isAgencyAdmin ? 'Agencia' : 'Operador'}
+              </div>
+            </div>
+          </button>
+
+          <button
+            onClick={onLogout}
+            title="Cerrar sesión"
+            className="p-1.5 rounded hover:bg-white/[0.06] text-zinc-500 hover:text-zinc-200 transition cursor-pointer"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
     </aside>
   );
 }

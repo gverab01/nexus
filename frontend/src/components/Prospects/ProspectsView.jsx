@@ -1,37 +1,41 @@
+// Espacio dedicado a la Búsqueda directa y Extracción de prospectos en LinkedIn
 import React, { useState, useEffect } from 'react';
 import { 
-  Users, 
-  Send, 
-  UserCheck, 
-  Clock, 
   Search, 
-  RefreshCw, 
-  ExternalLink, 
   Sparkles, 
   Building2, 
-  ChevronRight,
-  Filter,
+  MapPin, 
+  ExternalLink, 
+  UserPlus, 
+  CheckCircle2, 
+  AlertCircle, 
+  ChevronLeft, 
+  ChevronRight, 
+  ChevronsLeft, 
+  ChevronsRight, 
+  X, 
+  Plus, 
+  Layers, 
+  Database, 
+  RefreshCw, 
+  Eye,
   History,
-  Trash2,
-  UserPlus,
-  CheckCircle2,
-  X,
   CheckSquare,
   Square,
-  AlertCircle,
-  Briefcase
+  Compass,
+  Users,
+  UserCheck,
+  Send
 } from 'lucide-react';
 import { 
-  fetchProspects, 
-  fetchMetrics, 
   fetchLeadLists, 
   triggerExtraction,
+  extractNetworkLeads,
   importSelectedProspects,
-  deleteProspect,
-  deleteProspectsBatch,
-  syncLeadWithLinkedIn
+  syncLeadWithLinkedIn 
 } from '../../services/api';
 import LeadModal from './LeadModal';
+import NewListModal from '../Lists/NewListModal';
 
 const RECENT_SEARCHES_KEY = 'nexusreach_recent_searches';
 const DEFAULT_SEARCHES = [
@@ -68,201 +72,136 @@ function saveSearchTermToStorage(term) {
   return updated;
 }
 
+function getWindowedPages(current, total) {
+  if (total <= 7) {
+    return Array.from({ length: total }, (_, i) => i + 1);
+  }
+  if (current <= 4) {
+    return [1, 2, 3, 4, 5, '...', total];
+  }
+  if (current >= total - 3) {
+    return [1, '...', total - 4, total - 3, total - 2, total - 1, total];
+  }
+  return [1, '...', current - 1, current, current + 1, '...', total];
+}
+
 export default function ProspectsView({ onExtractionStarted, activeTenantWorkspace = '' }) {
-  const [prospects, setProspects] = useState([]);
-  const [metrics, setMetrics] = useState({ hoy: 0, cola: 0, enviadas: 0, conectados: 0 });
-  const [leadLists, setLeadLists] = useState([]);
-  const [loading, setLoading] = useState(true);
-  
-  // Filtros y búsqueda
-  const [activeFilter, setActiveFilter] = useState('');
-  const [searchQuery, setSearchQuery] = useState('');
-  
-  // Parámetros de extracción
+  // Parámetros de búsqueda
   const [searchTerm, setSearchTerm] = useState('CEO Founder Chile');
   const [selectedPage, setSelectedPage] = useState(1);
-  const [targetListId, setTargetListId] = useState('');
   const [extracting, setExtracting] = useState(false);
+  const [networkSourceMode, setNetworkSourceMode] = useState('all'); // 'all', 'connections', 'sent_invitations'
+  const [networkLimit, setNetworkLimit] = useState(50); // 20, 50, 100, 200
+  const [extractingNetwork, setExtractingNetwork] = useState(false);
   const [recentSearches, setRecentSearches] = useState(getStoredRecentSearches);
-  
-  // Vista previa de resultados de búsqueda (Descubrimiento y selección previa)
+
+  // Listas de leads en el workspace
+  const [leadLists, setLeadLists] = useState([]);
+
+  // Resultados de búsqueda en LinkedIn (descubiertos en vivo)
   const [discoveredLeads, setDiscoveredLeads] = useState([]);
   const [selectedDiscoveredUrls, setSelectedDiscoveredUrls] = useState(new Set());
-  const [showDiscoveryPanel, setShowDiscoveryPanel] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
+  const [savedUrls, setSavedUrls] = useState(new Set());
+
+  // Paginación de resultados descubiertos / extraídos
+  const [resultsPage, setResultsPage] = useState(1);
+  const [resultsPerPage, setResultsPerPage] = useState(20);
+
+  // Modal para guardar en múltiples listas
+  const [showSaveToListsModal, setShowSaveToListsModal] = useState(false);
+  const [selectedTargetListIds, setSelectedTargetListIds] = useState(new Set());
   const [importingSelected, setImportingSelected] = useState(false);
+  const [showNewListModal, setShowNewListModal] = useState(false);
 
-  // Selección múltiple para eliminación en bloque de la base de datos
-  const [selectedDirectoryIds, setSelectedDirectoryIds] = useState(new Set());
-  const [isDeletingBatch, setIsDeletingBatch] = useState(false);
+  // Modal para ver detalle completo de un lead
+  const [selectedProspectForModal, setSelectedProspectForModal] = useState(null);
   const [syncingLeadIds, setSyncingLeadIds] = useState(new Set());
-  const [recentlySyncedIds, setRecentlySyncedIds] = useState(new Set());
-
-  // Modal de detalle
-  const [selectedProspect, setSelectedProspect] = useState(null);
 
   useEffect(() => {
-    loadData(true);
     loadLists();
-  }, [activeFilter, activeTenantWorkspace]);
-
-  function handleProspectUpdated(updatedLead) {
-    if (!updatedLead?.id) {
-      loadData(false);
-      return;
-    }
-
-    if (updatedLead._deleted) {
-      setProspects((prev) => prev.filter((p) => p.id !== updatedLead.id));
-      setSelectedDirectoryIds((prev) => {
-        const next = new Set(prev);
-        next.delete(updatedLead.id);
-        return next;
-      });
-      loadData(false);
-      return;
-    }
-
-    const normalized = {
-      id: updatedLead.id,
-      nombre: updatedLead.nombre,
-      cargo_actual: updatedLead.cargo_actual || updatedLead.cargo || updatedLead.cargo_titular || 'Profesional / Decisor',
-      cargo_titular: updatedLead.cargo_titular || updatedLead.cargo || '',
-      cargo: updatedLead.cargo_actual || updatedLead.cargo_titular || updatedLead.cargo || 'Profesional / Decisor',
-      institucion: updatedLead.institucion_actual || updatedLead.institucion || 'Organización no declarada',
-      institucion_actual: updatedLead.institucion_actual || updatedLead.institucion,
-      ubicacion: updatedLead.ubicacion || 'Chile',
-      url_perfil: updatedLead.perfil_url || updatedLead.url_perfil,
-      grado_red: updatedLead.grado_red || '2°/3°',
-      estado: updatedLead.estado || 'EXTRAIDO',
-      email_directo: updatedLead.email || updatedLead.email_directo,
-      telefono_directo: updatedLead.telefono || updatedLead.telefono_directo,
-      fecha_extraccion: updatedLead.fecha_extraccion || updatedLead.created_at,
-      fecha_invitacion: updatedLead.fecha_invitacion,
-      fecha_conexion: updatedLead.fecha_conexion,
-      etiquetas: Array.isArray(updatedLead.tags) ? updatedLead.tags : (updatedLead.etiquetas || []),
-      historial_interacciones: updatedLead.historial || updatedLead.historial_interacciones || [],
-    };
-
-    // Actualización quirúrgica en el array local sin tocar el DOM de las demás filas
-    // ni resetear el scroll o disparar pantalla de carga
-    setProspects((prev) =>
-      prev.map((p) => (p.id === normalized.id ? { ...p, ...normalized } : p))
-    );
-
-    // Mantener sincronizado el prospecto en el modal de detalle si está abierto
-    setSelectedProspect((prev) => (prev && prev.id === normalized.id ? { ...prev, ...normalized } : prev));
-
-    // Efecto sutil de éxito para identificar visualmente la fila actualizada
-    setRecentlySyncedIds((prev) => new Set(prev).add(normalized.id));
-    setTimeout(() => {
-      setRecentlySyncedIds((prev) => {
-        const next = new Set(prev);
-        next.delete(normalized.id);
-        return next;
-      });
-    }, 2500);
-
-    // Refrescar métricas en segundo plano silenciosamente
-    fetchMetrics(activeTenantWorkspace).then((metricsData) => {
-      setMetrics({
-        hoy: metricsData.invitaciones_hoy || 0,
-        cola: metricsData.en_cola || 0,
-        enviadas: metricsData.invitaciones_enviadas || 0,
-        conectados: metricsData.conectados || 0,
-      });
-    }).catch(() => {});
-  }
-
-  async function loadData(showLoading = false) {
-    try {
-      if (showLoading) {
-        setLoading(true);
-      }
-      const [prospectsData, metricsData] = await Promise.all([
-        fetchProspects(activeFilter, searchQuery, activeTenantWorkspace),
-        fetchMetrics(activeTenantWorkspace).catch(() => ({})),
-      ]);
-      setProspects(prospectsData || []);
-      setMetrics({
-        hoy: metricsData.invitaciones_hoy || 0,
-        cola: metricsData.en_cola || 0,
-        enviadas: metricsData.invitaciones_enviadas || 0,
-        conectados: metricsData.conectados || 0,
-      });
-    } catch (err) {
-      console.error('Error cargando prospectos:', err);
-    } finally {
-      if (showLoading) {
-        setLoading(false);
-      }
-    }
-  }
+  }, [activeTenantWorkspace]);
 
   async function loadLists() {
     try {
       const lists = await fetchLeadLists(activeTenantWorkspace);
       setLeadLists(lists || []);
-      if (lists && lists.length > 0 && !targetListId) {
-        setTargetListId(lists[0].id);
+      if (lists && lists.length > 0) {
+        setSelectedTargetListIds(new Set([lists[0].id]));
       }
     } catch (err) {
       console.error('Error cargando listas:', err);
     }
   }
 
-  async function handleSearch(e) {
-    e.preventDefault();
+  async function handleSyncLead(e, lead) {
+    e.stopPropagation();
+    if (!lead?.id) return;
     try {
-      setLoading(true);
-      const data = await fetchProspects(activeFilter, searchQuery, activeTenantWorkspace);
-      setProspects(data || []);
+      setSyncingLeadIds(prev => new Set(prev).add(lead.id));
+      const res = await syncLeadWithLinkedIn(lead.id);
+      if (res && res.lead) {
+        setDiscoveredLeads(prev => prev.map(l => (l.id === lead.id || l.perfil_url === lead.perfil_url) ? {
+          ...l,
+          cargo_actual: res.lead.cargo_actual,
+          institucion_actual: res.lead.institucion_actual,
+          ubicacion: res.lead.ubicacion,
+          nombre: res.lead.nombre,
+        } : l));
+      }
     } catch (err) {
-      console.error(err);
+      alert(`Error sincronizando lead: ${err.message}`);
     } finally {
-      setLoading(false);
+      setSyncingLeadIds(prev => {
+        const next = new Set(prev);
+        next.delete(lead.id);
+        return next;
+      });
     }
   }
 
-  async function handleRunExtraction() {
+  async function executeSearch(termToSearch, pageToSearch = 1) {
+    const term = termToSearch || searchTerm;
+    if (!term.trim()) {
+      alert('Ingresa un término o cargo para buscar en LinkedIn');
+      return;
+    }
+
     try {
       setExtracting(true);
       if (onExtractionStarted) onExtractionStarted();
-      
-      // Ejecutar búsqueda en LinkedIn con auto_guardar = false para mostrar primero los resultados al usuario
-      const res = await triggerExtraction(searchTerm, selectedPage, targetListId || null, false, activeTenantWorkspace);
-      
+
+      const res = await triggerExtraction(term, pageToSearch, null, false, activeTenantWorkspace);
+
       if (res.status === 'error') {
         alert(`Error en búsqueda: ${res.mensaje || 'Error desconocido'}`);
         return;
       }
-      
+
       if (res.status === 'warning') {
         alert(`Aviso: ${res.mensaje}`);
         if (!res.leads || res.leads.length === 0) return;
       }
-      
-      const leads = res.leads || [];
-      if (leads.length === 0) {
-        alert(`No se detectaron perfiles en la página ${selectedPage} para "${searchTerm}".`);
-        return;
-      }
 
+      const leads = res.leads || [];
       setDiscoveredLeads(leads);
+      setResultsPage(1);
+      setHasSearched(true);
+
       // Pre-seleccionar todos los perfiles que no existen aún en la base de datos
       const initialSelected = new Set();
       leads.forEach((l) => {
-        if (!l.ya_existe) {
+        if (!l.ya_existe && !savedUrls.has(l.perfil_url)) {
           initialSelected.add(l.perfil_url);
         }
       });
-      // Si todos ya estaban registrados, pre-seleccionamos todos por si desea asociarlos a una lista
-      if (initialSelected.size === 0) {
+      // Si todos ya estaban registrados, pre-seleccionamos todos por si desea asociarlos a otra lista
+      if (initialSelected.size === 0 && leads.length > 0) {
         leads.forEach(l => initialSelected.add(l.perfil_url));
       }
       setSelectedDiscoveredUrls(initialSelected);
-      setShowDiscoveryPanel(true);
 
-      const updatedSearches = saveSearchTermToStorage(searchTerm);
+      const updatedSearches = saveSearchTermToStorage(term);
       if (updatedSearches) setRecentSearches(updatedSearches);
     } catch (err) {
       alert(`Error buscando prospectos en LinkedIn: ${err.message}`);
@@ -271,47 +210,63 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
     }
   }
 
-  async function handleImportSelected() {
-    const toImport = discoveredLeads.filter(l => selectedDiscoveredUrls.has(l.perfil_url));
-    if (toImport.length === 0) {
-      alert('Por favor selecciona al menos un prospecto para incorporar.');
-      return;
-    }
-
+  async function handleExtractNetwork(sourceToExtract = null, limitToExtract = null) {
+    const src = sourceToExtract || networkSourceMode;
+    const limit = limitToExtract || networkLimit;
     try {
-      setImportingSelected(true);
-      const res = await importSelectedProspects(toImport, targetListId || null, activeTenantWorkspace);
-      const agregados = res.nuevos_importados ?? 0;
-      const omitidos = res.duplicados_omitidos ?? 0;
-      alert(`¡Éxito! ${agregados} prospectos incorporados a tu base de datos (${omitidos} ya existentes asociados).`);
+      setExtractingNetwork(true);
+      if (onExtractionStarted) onExtractionStarted();
 
-      // Actualizar estado de los descubiertos
-      setDiscoveredLeads(prev => prev.map(l => {
-        if (selectedDiscoveredUrls.has(l.perfil_url)) {
-          return { ...l, ya_existe: true, guardado: true };
+      const res = await extractNetworkLeads(src, limit, activeTenantWorkspace);
+
+      if (res.status === 'error') {
+        alert(`Error en extracción de red: ${res.mensaje || 'Error desconocido'}`);
+        return;
+      }
+
+      if (res.status === 'warning') {
+        alert(`Aviso: ${res.mensaje}`);
+        if (!res.leads || res.leads.length === 0) return;
+      }
+
+      const leads = res.leads || [];
+      setDiscoveredLeads(leads);
+      setResultsPage(1);
+      setHasSearched(true);
+
+      // Pre-seleccionar todos los perfiles que no existen aún en la base de datos
+      const initialSelected = new Set();
+      leads.forEach((l) => {
+        if (!l.ya_existe && !savedUrls.has(l.perfil_url)) {
+          initialSelected.add(l.perfil_url);
         }
-        return l;
-      }));
-      setSelectedDiscoveredUrls(new Set());
-      loadData();
-      loadLists();
+      });
+      // Si todos ya estaban registrados, pre-seleccionamos todos por si desea asociarlos a otra lista
+      if (initialSelected.size === 0 && leads.length > 0) {
+        leads.forEach(l => initialSelected.add(l.perfil_url));
+      }
+      setSelectedDiscoveredUrls(initialSelected);
     } catch (err) {
-      alert(`Error incorporando prospectos: ${err.message}`);
+      alert(`Error extrayendo contactos de LinkedIn: ${err.message}`);
     } finally {
-      setImportingSelected(false);
+      setExtractingNetwork(false);
     }
   }
 
-  function handleToggleSelectAllDiscovered() {
-    if (selectedDiscoveredUrls.size === discoveredLeads.length) {
-      setSelectedDiscoveredUrls(new Set());
-    } else {
-      setSelectedDiscoveredUrls(new Set(discoveredLeads.map(l => l.perfil_url)));
-    }
+  function handleSearchSubmit(e) {
+    if (e) e.preventDefault();
+    setSelectedPage(1);
+    executeSearch(searchTerm, 1);
+  }
+
+  async function handleGoToPage(pageNum) {
+    if (pageNum === selectedPage && discoveredLeads.length > 0) return;
+    setSelectedPage(pageNum);
+    await executeSearch(searchTerm, pageNum);
   }
 
   function handleToggleDiscoveredLead(url) {
-    setSelectedDiscoveredUrls(prev => {
+    setSelectedDiscoveredUrls((prev) => {
       const next = new Set(prev);
       if (next.has(url)) next.delete(url);
       else next.add(url);
@@ -319,175 +274,145 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
     });
   }
 
-  async function handleDeleteSingleProspect(prospect, e) {
-    if (e) e.stopPropagation();
-    const confirmed = window.confirm(`¿Seguro que deseas eliminar permanentemente a "${prospect.nombre}" de tu base de datos?`);
-    if (!confirmed) return;
-
-    try {
-      await deleteProspect(prospect.id);
-      handleProspectUpdated({ id: prospect.id, _deleted: true });
-      loadLists();
-    } catch (err) {
-      alert(`Error eliminando prospecto: ${err.message}`);
-    }
-  }
-
-  async function handleSyncSingleProspect(prospect, e) {
-    if (e) e.stopPropagation();
-    if (!prospect?.id) return;
-    try {
-      setSyncingLeadIds((prev) => new Set(prev).add(prospect.id));
-      const res = await syncLeadWithLinkedIn(prospect.id);
-      if (res && res.lead) {
-        handleProspectUpdated(res.lead);
-      } else {
-        await loadData(false);
-      }
-    } catch (err) {
-      alert(`Error al sincronizar con LinkedIn: ${err.message}`);
-    } finally {
-      setSyncingLeadIds((prev) => {
-        const next = new Set(prev);
-        next.delete(prospect.id);
-        return next;
-      });
-    }
-  }
-
-  async function handleDeleteBatch() {
-    if (selectedDirectoryIds.size === 0) return;
-    const count = selectedDirectoryIds.size;
-    const confirmed = window.confirm(
-      `¿Seguro que deseas eliminar permanentemente los ${count} prospectos seleccionados de tu base de datos?\nEsta acción no se puede deshacer.`
-    );
-    if (!confirmed) return;
-
-    try {
-      setIsDeletingBatch(true);
-      await deleteProspectsBatch(Array.from(selectedDirectoryIds));
-      setSelectedDirectoryIds(new Set());
-      loadData();
-      loadLists();
-    } catch (err) {
-      alert(`Error eliminando prospectos seleccionados: ${err.message}`);
-    } finally {
-      setIsDeletingBatch(false);
-    }
-  }
-
-  function handleToggleSelectAllDirectory() {
-    if (selectedDirectoryIds.size === filteredProspects.length && filteredProspects.length > 0) {
-      setSelectedDirectoryIds(new Set());
+  function handleToggleSelectAllDiscovered() {
+    if (selectedDiscoveredUrls.size === discoveredLeads.length) {
+      setSelectedDiscoveredUrls(new Set());
     } else {
-      setSelectedDirectoryIds(new Set(filteredProspects.map(p => p.id)));
+      setSelectedDiscoveredUrls(new Set(discoveredLeads.map((l) => l.perfil_url)));
     }
   }
 
-  function handleToggleSelectDirectoryLead(id, e) {
-    if (e) e.stopPropagation();
-    setSelectedDirectoryIds(prev => {
+  function handleOpenSaveModal() {
+    const toImport = discoveredLeads.filter(l => selectedDiscoveredUrls.has(l.perfil_url));
+    if (toImport.length === 0) {
+      alert('Por favor selecciona al menos un prospecto para guardar en tus listas.');
+      return;
+    }
+    setShowSaveToListsModal(true);
+  }
+
+  function handleToggleTargetList(listId) {
+    setSelectedTargetListIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(listId)) {
+        if (next.size > 1) next.delete(listId); // Mantener al menos una seleccionada
+      } else {
+        next.add(listId);
+      }
       return next;
     });
   }
 
-  // Cálculo de tasa de aceptación
-  const acceptanceRate = metrics.enviadas > 0 
-    ? Math.round((metrics.conectados / metrics.enviadas) * 100) 
-    : 0;
+  async function handleConfirmSaveToLists() {
+    const toImport = discoveredLeads.filter(l => selectedDiscoveredUrls.has(l.perfil_url));
+    if (toImport.length === 0) return;
 
-  // Filtrado local por texto
-  const filteredProspects = prospects.filter((p) => {
-    if (!searchQuery) return true;
-    const q = searchQuery.toLowerCase();
-    return (
-      (p.nombre && p.nombre.toLowerCase().includes(q)) ||
-      (p.cargo && p.cargo.toLowerCase().includes(q)) ||
-      (p.institucion && p.institucion.toLowerCase().includes(q))
-    );
-  });
+    if (selectedTargetListIds.size === 0) {
+      alert('Selecciona al menos una lista de destino.');
+      return;
+    }
+
+    try {
+      setImportingSelected(true);
+      const listIdsArray = Array.from(selectedTargetListIds);
+      const res = await importSelectedProspects(toImport, listIdsArray, activeTenantWorkspace);
+
+      const agregados = res.nuevos_importados ?? 0;
+      const omitidos = res.duplicados_omitidos ?? 0;
+      const totalAfectados = toImport.length;
+
+      // Marcar URLs como guardadas
+      setSavedUrls((prev) => {
+        const next = new Set(prev);
+        toImport.forEach((l) => next.add(l.perfil_url));
+        return next;
+      });
+
+      alert(
+        `¡Prospectos guardados con éxito!\n` +
+        `• ${totalAfectados} prospectos asignados a ${listIdsArray.length} lista(s) de destino.\n` +
+        `• ${agregados} nuevos incorporados a la base (${omitidos} preexistentes vinculados).`
+      );
+
+      setShowSaveToListsModal(false);
+      setSelectedDiscoveredUrls(new Set());
+      await loadLists();
+    } catch (err) {
+      alert(`Error guardando prospectos: ${err.message}`);
+    } finally {
+      setImportingSelected(false);
+    }
+  }
+
+  // Cálculos de paginación para la lista de prospectos descubiertos/extraídos
+  const isNetworkView = discoveredLeads.some(l => l.tipo_origen);
+  const useClientPagination = isNetworkView || discoveredLeads.length > resultsPerPage;
+
+  const totalResultsPages = Math.ceil(discoveredLeads.length / resultsPerPage) || 1;
+  const safePage = Math.min(Math.max(1, resultsPage), totalResultsPages);
+
+  const displayedLeads = useClientPagination
+    ? discoveredLeads.slice((safePage - 1) * resultsPerPage, safePage * resultsPerPage)
+    : discoveredLeads;
+
+  const currentPageUrls = displayedLeads.map(l => l.perfil_url);
+  const selectedOnCurrentPage = currentPageUrls.filter(u => selectedDiscoveredUrls.has(u)).length;
+  const isCurrentPageFullySelected = currentPageUrls.length > 0 && selectedOnCurrentPage === currentPageUrls.length;
+  const isAllFullySelected = discoveredLeads.length > 0 && selectedDiscoveredUrls.size === discoveredLeads.length;
+
+  function handleToggleCurrentPageSelection() {
+    setSelectedDiscoveredUrls((prev) => {
+      const next = new Set(prev);
+      if (isCurrentPageFullySelected) {
+        currentPageUrls.forEach(url => next.delete(url));
+      } else {
+        currentPageUrls.forEach(url => next.add(url));
+      }
+      return next;
+    });
+  }
+
+  function handleToggleAllDiscoveredSelection() {
+    if (isAllFullySelected) {
+      setSelectedDiscoveredUrls(new Set());
+    } else {
+      setSelectedDiscoveredUrls(new Set(discoveredLeads.map((l) => l.perfil_url)));
+    }
+  }
 
   return (
     <div className="space-y-5 font-sans animate-fadeIn">
       {/* 1. Header de Sección */}
-      <div>
-        <h2 className="text-base font-semibold text-zinc-100 tracking-tight">Directorio de Prospectos B2B</h2>
-        <p className="text-xs text-zinc-400 mt-0.5">
-          Búsqueda directa en LinkedIn, extracción y enriquecimiento de decisores calificados
-        </p>
-      </div>
-
-      {/* 2. Tarjetas KPI Métricas */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <div className="p-3.5 rounded-xl bg-[#121316] border border-white/[0.08]">
-          <div className="flex items-center justify-between text-zinc-400 text-xs mb-1.5">
-            <span className="font-medium text-zinc-300">Invitaciones Hoy</span>
-            <Clock className="w-3.5 h-3.5 text-zinc-400" />
-          </div>
-          <div className="text-xl font-semibold font-mono tracking-tight text-zinc-100">
-            {metrics.hoy} <span className="text-xs text-zinc-500 font-normal">/ 5</span>
-          </div>
-          <div className="mt-2 w-full bg-white/[0.06] h-1 rounded-full overflow-hidden">
-            <div 
-              className="bg-zinc-200 h-full rounded-full transition-all"
-              style={{ width: `${Math.min(100, (metrics.hoy / 5) * 100)}%` }}
-            />
-          </div>
-          <span className="text-[10px] text-zinc-500 mt-1.5 block">5 máx. diario seguro</span>
-        </div>
-
-        <div className="p-3.5 rounded-xl bg-[#121316] border border-white/[0.08]">
-          <div className="flex items-center justify-between text-zinc-400 text-xs mb-1.5">
-            <span className="font-medium text-zinc-300">En Cola</span>
-            <Users className="w-3.5 h-3.5 text-zinc-400" />
-          </div>
-          <div className="text-xl font-semibold font-mono tracking-tight text-zinc-100">
-            {metrics.cola}
-          </div>
-          <span className="text-[10px] text-zinc-400 mt-2 block font-medium">Listos para secuencia</span>
-        </div>
-
-        <div className="p-3.5 rounded-xl bg-[#121316] border border-white/[0.08]">
-          <div className="flex items-center justify-between text-zinc-400 text-xs mb-1.5">
-            <span className="font-medium text-zinc-300">Invitaciones Enviadas</span>
-            <Send className="w-3.5 h-3.5 text-zinc-400" />
-          </div>
-          <div className="text-xl font-semibold font-mono tracking-tight text-zinc-100">
-            {metrics.enviadas}
-          </div>
-          <span className="text-[10px] text-zinc-500 mt-2 block">Esperando respuesta</span>
-        </div>
-
-        <div className="p-3.5 rounded-xl bg-[#121316] border border-white/[0.08]">
-          <div className="flex items-center justify-between text-zinc-400 text-xs mb-1.5">
-            <span className="font-medium text-zinc-300">Conectados</span>
-            <UserCheck className="w-3.5 h-3.5 text-zinc-400" />
-          </div>
-          <div className="text-xl font-semibold font-mono tracking-tight text-zinc-100 flex items-baseline gap-2">
-            {metrics.conectados}
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/[0.04] text-zinc-300 border border-white/[0.08] font-mono font-normal">
-              Tasa: {acceptanceRate}%
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h2 className="text-base font-semibold text-zinc-100 tracking-tight flex items-center gap-2">
+            <span>Búsqueda de Prospectos B2B</span>
+            <span className="text-[10px] px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono font-normal border border-white/[0.06]">
+              LinkedIn Live Discovery
             </span>
-          </div>
-          <span className="text-[10px] text-zinc-500 mt-2 block">1er Grado activo</span>
+          </h2>
+          <p className="text-xs text-zinc-400 mt-0.5">
+            Explora decisores directamente en LinkedIn, navega resultados por páginas y guárdalos en una o varias listas a la vez.
+          </p>
         </div>
       </div>
 
-      {/* Panel de Extracción Directa desde LinkedIn */}
-      <div className="p-4 rounded-xl bg-[#121316] border border-white/[0.08] space-y-3.5">
+      {/* 2. Barra de Búsqueda y Extracción */}
+      <div className="p-4 rounded-xl bg-[#121316] border border-white/[0.08] space-y-3.5 shadow-xs">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-md bg-white/[0.04] border border-white/[0.08] flex items-center justify-center text-zinc-300">
-              <Sparkles className="w-3.5 h-3.5 text-zinc-300" />
+            <div className="w-7 h-7 rounded-md bg-white/[0.04] border border-white/[0.08] flex items-center justify-center text-zinc-300 shrink-0">
+              <Search className="w-3.5 h-3.5 text-zinc-300" />
             </div>
             <div>
-              <h3 className="text-xs font-medium text-zinc-100">Extracción Directa de LinkedIn</h3>
-              <p className="text-[11px] text-zinc-400">Descubre y califica prospectos mediante tu sesión conectada</p>
+              <h3 className="text-xs font-medium text-zinc-100">Buscador en Tiempo Real de LinkedIn</h3>
+              <p className="text-[11px] text-zinc-400">
+                Consulta perfiles calificados por cargos, sectores o empresas objetivo
+              </p>
             </div>
           </div>
+
+          {/* Búsquedas recientes */}
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-[11px] text-zinc-500 mr-1 flex items-center gap-1">
               <History className="w-3 h-3 text-zinc-500" />
@@ -497,7 +422,11 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
               <button
                 key={term}
                 type="button"
-                onClick={() => setSearchTerm(term)}
+                onClick={() => {
+                  setSearchTerm(term);
+                  setSelectedPage(1);
+                  executeSearch(term, 1);
+                }}
                 className="px-2 py-0.5 rounded-md text-[11px] bg-[#0D0E12] hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 border border-white/[0.06] transition cursor-pointer"
                 title={`Buscar "${term}"`}
               >
@@ -507,186 +436,402 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
           </div>
         </div>
 
-        {/* Formulario de extracción */}
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-2.5 items-end">
-          <div className="md:col-span-5">
-            <label className="block text-[11px] font-medium text-zinc-400 mb-1">Término de Búsqueda</label>
+        {/* Formulario de búsqueda */}
+        <form onSubmit={handleSearchSubmit} className="flex flex-col sm:flex-row items-center gap-2.5">
+          <div className="relative flex-1 w-full">
+            <Search className="w-4 h-4 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Ej: CEO Founder Chile, Gerente Comercial, Director..."
-              className="w-full bg-[#0D0E12] border border-white/[0.08] px-3 py-1.5 rounded-md text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-zinc-500 font-sans"
+              placeholder="Ej: CEO Founder Chile, Gerente Comercial, Director de Operaciones..."
+              className="w-full bg-[#0D0E12] border border-white/[0.08] pl-9 pr-3 py-2 rounded-lg text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-zinc-500 font-sans"
             />
           </div>
 
-          <div className="md:col-span-2">
-            <label className="block text-[11px] font-medium text-zinc-400 mb-1">Página</label>
-            <select
-              value={selectedPage}
-              onChange={(e) => setSelectedPage(e.target.value)}
-              className="w-full bg-[#0D0E12] border border-white/[0.08] px-3 py-1.5 rounded-md text-xs text-zinc-200 focus:outline-none focus:border-zinc-500"
-            >
-              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((num) => (
-                <option key={num} value={num}>Página {num}</option>
-              ))}
-            </select>
+          <button
+            type="submit"
+            disabled={extracting || extractingNetwork}
+            className="w-full sm:w-auto flex items-center justify-center gap-2 px-5 py-2 rounded-lg bg-white hover:bg-zinc-200 text-zinc-950 font-medium text-xs shadow-sm transition cursor-pointer disabled:opacity-50 shrink-0"
+          >
+            <Search className={`w-3.5 h-3.5 ${extracting ? 'animate-spin' : ''}`} />
+            <span>{extracting ? 'Buscando en LinkedIn...' : 'Buscar en LinkedIn'}</span>
+          </button>
+        </form>
+
+        {/* Barra de Extracción Directa desde mi Red LinkedIn */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-white/[0.06]">
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Canal de extracción */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] text-zinc-400 font-medium flex items-center gap-1">
+                <Users className="w-3.5 h-3.5 text-blue-400" />
+                <span>Canal:</span>
+              </span>
+              <div className="inline-flex rounded-lg bg-[#0D0E12] p-0.5 border border-white/[0.08]">
+                <button
+                  type="button"
+                  onClick={() => setNetworkSourceMode('all')}
+                  className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition cursor-pointer ${
+                    networkSourceMode === 'all'
+                      ? 'bg-zinc-800 text-white shadow-xs'
+                      : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  Todo (Conexiones + Invitaciones)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNetworkSourceMode('connections')}
+                  className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition cursor-pointer ${
+                    networkSourceMode === 'connections'
+                      ? 'bg-zinc-800 text-white shadow-xs'
+                      : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  1º Grado (Conectados)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNetworkSourceMode('sent_invitations')}
+                  className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition cursor-pointer ${
+                    networkSourceMode === 'sent_invitations'
+                      ? 'bg-zinc-800 text-white shadow-xs'
+                      : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  Invitaciones Enviadas
+                </button>
+              </div>
+            </div>
+
+            {/* Selector de Límite / Profundidad */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] text-zinc-400 font-medium">Límite:</span>
+              <div className="inline-flex rounded-lg bg-[#0D0E12] p-0.5 border border-white/[0.08]">
+                {[20, 50, 100, 200].map((qty) => (
+                  <button
+                    key={qty}
+                    type="button"
+                    onClick={() => setNetworkLimit(qty)}
+                    className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition cursor-pointer ${
+                      networkLimit === qty
+                        ? 'bg-blue-600 text-white shadow-xs'
+                        : 'text-zinc-400 hover:text-zinc-200'
+                    }`}
+                    title={`Extraer hasta ${qty} contactos de la cola`}
+                  >
+                    {qty}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
 
-          <div className="md:col-span-3">
-            <label className="block text-[11px] font-medium text-zinc-400 mb-1">Lista Destino</label>
-            <select
-              value={targetListId}
-              onChange={(e) => setTargetListId(e.target.value)}
-              className="w-full bg-[#0D0E12] border border-white/[0.08] px-3 py-1.5 rounded-md text-xs text-zinc-200 focus:outline-none focus:border-zinc-500"
-            >
-              {leadLists.length === 0 ? (
-                <option value="">Sin listas creadas</option>
-              ) : (
-                leadLists.map((l) => (
-                  <option key={l.id} value={l.id}>{l.nombre} ({l.total_leads || 0})</option>
-                ))
-              )}
-            </select>
-          </div>
-
-          <div className="md:col-span-2">
-            <button
-              onClick={handleRunExtraction}
-              disabled={extracting}
-              className="w-full flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-md bg-white hover:bg-zinc-200 text-zinc-950 font-medium text-xs shadow-sm transition cursor-pointer disabled:opacity-50"
-            >
-              <Search className={`w-3.5 h-3.5 ${extracting ? 'animate-spin' : ''}`} />
-              <span>{extracting ? 'Buscando...' : 'Buscar'}</span>
-            </button>
-          </div>
+          <button
+            type="button"
+            disabled={extracting || extractingNetwork}
+            onClick={() => handleExtractNetwork(networkSourceMode, networkLimit)}
+            className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium text-xs shadow-xs transition cursor-pointer disabled:opacity-50 shrink-0"
+            title={`Extraer hasta ${networkLimit} contactos desde tu perfil autenticado de LinkedIn en 1 clic`}
+          >
+            <Sparkles className={`w-3.5 h-3.5 ${extractingNetwork ? 'animate-spin' : ''}`} />
+            <span>{extractingNetwork ? `Extrayendo ${networkLimit} contactos...` : `Extraer ${networkLimit} Contactos`}</span>
+          </button>
         </div>
       </div>
 
-      {/* Panel Interactivo de Descubrimiento de Prospectos (Previsualización antes de guardar) */}
-      {showDiscoveryPanel && discoveredLeads.length > 0 && (
-        <div className="rounded-xl border border-white/[0.08] bg-[#121316] shadow-2xl p-4 space-y-3.5 animate-in fade-in duration-200">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/[0.06] pb-3">
+      {/* 3. Panel de Resultados de Búsqueda */}
+      {!hasSearched ? (
+        /* Estado inicial vacío cuando no se ha ejecutado ninguna búsqueda */
+        <div className="p-16 rounded-xl border border-white/[0.08] bg-[#121316] text-center space-y-4">
+          <div className="w-12 h-12 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center mx-auto text-zinc-400 shadow-xs">
+            <Compass className="w-6 h-6 text-zinc-400" />
+          </div>
+          <div className="space-y-1.5 max-w-md mx-auto">
+            <h3 className="text-sm font-semibold text-zinc-100">
+              Espacio de Búsqueda y Extracción de Prospectos
+            </h3>
+            <p className="text-xs text-zinc-400">
+              Busca nuevos decisores en LinkedIn o extrae directamente los contactos e invitaciones que ya enviaste para agregarlos a tu base de datos.
+            </p>
+          </div>
+
+          <div className="pt-2 flex items-center justify-center gap-2 flex-wrap">
+            {DEFAULT_SEARCHES.slice(0, 3).map((term) => (
+              <button
+                key={term}
+                onClick={() => {
+                  setSearchTerm(term);
+                  setSelectedPage(1);
+                  executeSearch(term, 1);
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0D0E12] hover:bg-zinc-800 border border-white/[0.08] text-xs text-zinc-300 hover:text-white transition cursor-pointer"
+              >
+                <Search className="w-3 h-3 text-zinc-500" />
+                <span>Buscar: {term}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* Tarjeta de acción rápida: Extraer desde red propia */}
+          <div className="mt-4 p-4 rounded-xl bg-blue-950/20 border border-blue-500/20 max-w-lg mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 text-left">
+            <div className="space-y-0.5">
+              <div className="text-xs font-semibold text-zinc-100 flex items-center gap-1.5">
+                <Users className="w-3.5 h-3.5 text-blue-400" />
+                <span>¿Ya tienes contactos o invitaciones en LinkedIn?</span>
+              </div>
+              <p className="text-[11px] text-zinc-400">
+                Extrae tus conexiones de 1º grado e invitaciones enviadas en un clic para incorporarlas a tu base de leads.
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={extracting || extractingNetwork}
+              onClick={() => handleExtractNetwork('all')}
+              className="w-full sm:w-auto px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium text-xs shrink-0 cursor-pointer shadow-xs transition flex items-center justify-center gap-1.5"
+            >
+              <Sparkles className={`w-3 h-3 ${extractingNetwork ? 'animate-spin' : ''}`} />
+              <span>{extractingNetwork ? 'Extrayendo...' : 'Extraer de mi Red'}</span>
+            </button>
+          </div>
+        </div>
+      ) : (extracting || extractingNetwork) ? (
+        /* Estado de carga durante la extracción */
+        <div className="p-16 rounded-xl border border-white/[0.08] bg-[#121316] text-center space-y-3">
+          <div className="w-7 h-7 border-2 border-blue-500 border-t-white rounded-full animate-spin mx-auto" />
+          <p className="text-xs text-zinc-200 font-medium">
+            {extractingNetwork ? 'Extrayendo contactos e invitaciones desde tu cuenta de LinkedIn...' : 'Buscando prospectos en LinkedIn...'}
+          </p>
+          <p className="text-[11px] text-zinc-500">
+            {extractingNetwork ? 'Inspeccionando conexiones y solicitudes con ritmo humano seguro' : `Navegando página ${selectedPage} con ritmo humano seguro`}
+          </p>
+        </div>
+      ) : discoveredLeads.length === 0 ? (
+        /* Estado cuando no se encontraron perfiles en esa página */
+        <div className="p-12 rounded-xl border border-white/[0.08] bg-[#121316] text-center space-y-3">
+          <AlertCircle className="w-8 h-8 text-zinc-500 mx-auto" />
+          <p className="text-xs text-zinc-300 font-medium">
+            No se detectaron perfiles en la página {selectedPage} para "{searchTerm}".
+          </p>
+          <p className="text-[11px] text-zinc-500">
+            Prueba ajustando el término o navegando a otra página de resultados.
+          </p>
+        </div>
+      ) : (
+        /* Resultados encontrados */
+        <div className="rounded-xl border border-white/[0.08] bg-[#121316] shadow-xl overflow-hidden space-y-0 animate-fadeIn">
+          {/* Header de la tabla de resultados */}
+          <div className="p-4 border-b border-white/[0.06] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center gap-2.5">
               <div className="w-7 h-7 rounded-md bg-white/[0.04] border border-white/[0.08] flex items-center justify-center text-zinc-300 shrink-0">
                 <Sparkles className="w-3.5 h-3.5 text-zinc-300" />
               </div>
               <div>
                 <div className="flex items-center gap-2">
-                  <h3 className="text-xs sm:text-sm font-medium text-zinc-100">
-                    Resultados encontrados en LinkedIn ({discoveredLeads.length})
+                  <h3 className="text-xs sm:text-sm font-semibold text-zinc-100">
+                    {isNetworkView 
+                      ? `Contactos de mi Red LinkedIn (${discoveredLeads.length} perfiles)` 
+                      : `Resultados en LinkedIn (${discoveredLeads.length} perfiles)`}
                   </h3>
-                  <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-white/[0.03] text-zinc-400 border border-white/[0.06]">
-                    Pág. {selectedPage}
+                  <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-zinc-900 text-zinc-300 border border-white/[0.08]">
+                    {useClientPagination ? `Pág. ${safePage} de ${totalResultsPages}` : `Página ${selectedPage}`}
                   </span>
                 </div>
                 <p className="text-[11px] text-zinc-400">
-                  Selecciona los contactos que deseas agregar a tu base de leads o vincular a la lista destino.
+                  {isNetworkView
+                    ? 'Revisa tus contactos e invitaciones y elige cuáles guardar en tus listas de NexusReach'
+                    : 'Selecciona los prospectos que deseas agregar a una o más listas de leads'}
                 </p>
               </div>
             </div>
 
             <div className="flex items-center gap-2 flex-wrap">
+              {useClientPagination && (
+                <button
+                  type="button"
+                  onClick={handleToggleCurrentPageSelection}
+                  className="px-2.5 py-1.5 rounded-md bg-[#0D0E12] hover:bg-zinc-800 border border-white/[0.08] text-zinc-300 text-xs font-medium transition cursor-pointer"
+                  title="Seleccionar o deseleccionar solo los prospectos visibles en la página actual"
+                >
+                  {isCurrentPageFullySelected ? 'Deseleccionar pág. actual' : `Seleccionar pág. actual (${selectedOnCurrentPage}/${displayedLeads.length})`}
+                </button>
+              )}
+
               <button
                 type="button"
-                onClick={handleToggleSelectAllDiscovered}
-                className="px-2.5 py-1 rounded-md bg-[#0D0E12] hover:bg-zinc-800 border border-white/[0.08] text-zinc-300 text-[11px] font-medium transition cursor-pointer"
+                onClick={handleToggleAllDiscoveredSelection}
+                className="px-2.5 py-1.5 rounded-md bg-[#0D0E12] hover:bg-zinc-800 border border-white/[0.08] text-zinc-300 text-xs font-medium transition cursor-pointer"
+                title="Seleccionar o deseleccionar todos los prospectos extraídos"
               >
-                {selectedDiscoveredUrls.size === discoveredLeads.length ? 'Deseleccionar todos' : 'Seleccionar todos'}
+                {isAllFullySelected ? 'Deseleccionar todos' : `Seleccionar todos (${discoveredLeads.length})`}
               </button>
 
               <button
                 type="button"
-                onClick={handleImportSelected}
-                disabled={importingSelected || selectedDiscoveredUrls.size === 0}
-                className="flex items-center gap-1.5 px-3 py-1 rounded-md bg-white hover:bg-zinc-200 text-zinc-950 text-xs font-medium shadow-sm transition cursor-pointer disabled:opacity-50"
+                onClick={handleOpenSaveModal}
+                disabled={selectedDiscoveredUrls.size === 0}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-md bg-white hover:bg-zinc-200 text-zinc-950 text-xs font-semibold shadow-sm transition cursor-pointer disabled:opacity-40"
               >
-                <UserPlus className={`w-3.5 h-3.5 ${importingSelected ? 'animate-spin' : ''}`} />
-                <span>
-                  {importingSelected 
-                    ? 'Agregando...' 
-                    : `Agregar a mis Leads (${selectedDiscoveredUrls.size})`}
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setShowDiscoveryPanel(false)}
-                title="Cerrar resultados de búsqueda"
-                className="p-1 rounded-md text-zinc-400 hover:text-white hover:bg-zinc-800 transition cursor-pointer"
-              >
-                <X className="w-4 h-4" />
+                <UserPlus className="w-3.5 h-3.5" />
+                <span>Guardar en Listas ({selectedDiscoveredUrls.size})</span>
               </button>
             </div>
           </div>
 
-          {/* Listado de prospectos descubiertos */}
-          <div className="divide-y divide-white/[0.04] max-h-80 overflow-y-auto pr-1">
-            {discoveredLeads.map((lead, idx) => {
+          {/* Listado de perfiles descubiertos */}
+          <div className="divide-y divide-white/[0.04] max-h-[500px] overflow-y-auto">
+            {displayedLeads.map((lead, idx) => {
               const isSelected = selectedDiscoveredUrls.has(lead.perfil_url);
+              const isSaved = lead.ya_existe || savedUrls.has(lead.perfil_url);
+
               return (
                 <div
                   key={lead.perfil_url || idx}
                   onClick={() => handleToggleDiscoveredLead(lead.perfil_url)}
-                  className={`py-2 px-3 rounded-md flex items-center justify-between gap-3 transition cursor-pointer ${
-                    isSelected ? 'bg-zinc-800/50 border border-white/[0.08]' : 'hover:bg-zinc-800/20 border border-transparent'
+                  className={`py-3 px-4 flex items-center justify-between gap-3 transition cursor-pointer ${
+                    isSelected ? 'bg-zinc-800/40 border-l-2 border-l-white' : 'hover:bg-white/[0.02]'
                   }`}
                 >
-                  <div className="flex items-center gap-3 min-w-0">
+                  <div className="flex items-center gap-3.5 min-w-0">
                     <input
                       type="checkbox"
                       checked={isSelected}
                       onChange={() => handleToggleDiscoveredLead(lead.perfil_url)}
                       onClick={(e) => e.stopPropagation()}
-                      className="w-3.5 h-3.5 rounded border-zinc-700 bg-zinc-900 text-zinc-100 focus:ring-0 cursor-pointer accent-zinc-200 shrink-0"
+                      className="w-4 h-4 rounded border-zinc-700 bg-zinc-900 text-zinc-100 focus:ring-0 cursor-pointer accent-zinc-200 shrink-0"
                     />
 
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-xs text-zinc-100 hover:text-zinc-300 transition truncate">
+                    {/* Avatar o Iniciales */}
+                    {lead.avatar_url ? (
+                      <img
+                        src={lead.avatar_url}
+                        alt={lead.nombre}
+                        className="w-8 h-8 rounded-full object-cover border border-white/[0.08] shrink-0"
+                      />
+                    ) : (
+                      <div className="w-8 h-8 rounded-full bg-zinc-800 border border-white/[0.08] flex items-center justify-center text-xs font-semibold text-zinc-300 shrink-0">
+                        {lead.nombre ? lead.nombre.charAt(0).toUpperCase() : 'L'}
+                      </div>
+                    )}
+
+                    <div className="min-w-0 space-y-0.5">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-semibold text-xs text-zinc-100 hover:text-white transition truncate">
                           {lead.nombre}
                         </span>
-                        {lead.grado_red && (
-                          <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-zinc-800 text-zinc-400">
+
+                        {/* Badges de Estado en Red */}
+                        {lead.estado_origen === 'CONECTADO' || lead.estado === 'CONECTADO' ? (
+                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-500/30 font-mono flex items-center gap-1 font-medium">
+                            <UserCheck className="w-2.5 h-2.5" /> 1º Grado • Conectado
+                          </span>
+                        ) : lead.estado_origen === 'INVITACION_ENVIADA' || lead.estado === 'INVITACION_ENVIADA' ? (
+                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-blue-950/60 text-blue-400 border border-blue-500/30 font-mono flex items-center gap-1 font-medium">
+                            <Send className="w-2.5 h-2.5" /> Invitación Enviada
+                          </span>
+                        ) : lead.grado_red ? (
+                          <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-zinc-900 text-zinc-400 border border-white/[0.06]">
                             {lead.grado_red}
                           </span>
-                        )}
-                        {lead.ya_existe ? (
-                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                            Ya en tu base
-                          </span>
-                        ) : (
-                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
-                            Nuevo
+                        ) : null}
+
+                        {lead.tiempo && (
+                          <span className="text-[10px] text-zinc-400 font-mono">
+                            {lead.tiempo}
                           </span>
                         )}
+
+                        {isSaved && (
+                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-950/40 text-emerald-400 border border-emerald-500/20 font-mono">
+                            ✓ En Base de Leads
+                          </span>
+                        )}
+                        {/* Listas a las que pertenece */}
+                        {isSaved && lead.listas && lead.listas.length > 0 && lead.listas.map((lst) => (
+                          <span 
+                            key={lst.id} 
+                            className="text-[10px] px-1.5 py-0.2 rounded bg-blue-950/50 text-blue-300 border border-blue-500/30 font-mono flex items-center gap-1"
+                            title={`Pertenece a la lista: ${lst.nombre}`}
+                          >
+                            <Layers className="w-2.5 h-2.5 text-blue-400" />
+                            {lst.nombre}
+                          </span>
+                        ))}
+                        {/* Secuencias en las que participa */}
+                        {isSaved && lead.secuencias && lead.secuencias.length > 0 && lead.secuencias.map((seq) => (
+                          <span 
+                            key={seq.id} 
+                            className="text-[10px] px-1.5 py-0.2 rounded bg-purple-950/50 text-purple-300 border border-purple-500/30 font-mono flex items-center gap-1"
+                            title={`En secuencia: ${seq.nombre} (${seq.estado || 'Activa'})`}
+                          >
+                            <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse" />
+                            {seq.nombre}
+                          </span>
+                        ))}
                       </div>
 
-                      <div className="text-[11px] text-zinc-300 truncate flex items-center gap-1.5 mt-0.5">
-                        <span className="font-medium text-emerald-400">
-                          {lead.cargo_actual || lead.cargo_titular || lead.cargo || 'Profesional'}
-                        </span>
-                        {lead.institucion_actual && <span className="text-zinc-500">· {lead.institucion_actual}</span>}
-                        {lead.ubicacion && <span className="text-zinc-500">· {lead.ubicacion}</span>}
+                      <div className="text-[11px] text-zinc-300 truncate max-w-lg">
+                        {lead.cargo_actual || lead.cargo_titular || lead.cargo || 'Profesional / Decisor'}
                       </div>
-                      {lead.cargo_titular && lead.cargo_titular !== lead.cargo_actual && (
-                        <div className="text-[10px] text-zinc-500 truncate italic">
-                          {lead.cargo_titular}
-                        </div>
-                      )}
+
+                      <div className="flex items-center gap-3 text-[11px] text-zinc-500 truncate">
+                        {(lead.institucion_actual || lead.institucion) && (
+                          <span className="flex items-center gap-1 truncate text-zinc-400">
+                            <Building2 className="w-3 h-3 text-zinc-500 shrink-0" />
+                            <span className="truncate">{lead.institucion_actual || lead.institucion}</span>
+                          </span>
+                        )}
+                        {lead.ubicacion && (
+                          <span className="flex items-center gap-1 truncate">
+                            <MapPin className="w-3 h-3 text-zinc-500 shrink-0" />
+                            <span className="truncate">{lead.ubicacion}</span>
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
 
                   <div className="flex items-center gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
+                    {/* Botón de Sincronización en vivo si ya existe en la base */}
+                    {isSaved && lead.id && (
+                      <button
+                        type="button"
+                        onClick={(e) => handleSyncLead(e, lead)}
+                        disabled={syncingLeadIds.has(lead.id)}
+                        className="flex items-center gap-1 px-2.5 py-1 rounded bg-zinc-900 hover:bg-zinc-800 border border-white/[0.08] text-[11px] font-medium text-zinc-300 hover:text-white transition cursor-pointer disabled:opacity-40"
+                        title="Sincronizar datos en vivo con LinkedIn"
+                      >
+                        <RefreshCw className={`w-3 h-3 ${syncingLeadIds.has(lead.id) ? 'animate-spin text-emerald-400' : 'text-zinc-400'}`} />
+                        <span className="hidden md:inline">{syncingLeadIds.has(lead.id) ? 'Sincronizando...' : 'Sincronizar'}</span>
+                      </button>
+                    )}
+
+                    {/* Botón para abrir la ficha completa del lead si ya existe */}
+                    {isSaved && lead.id && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedProspectForModal(lead);
+                        }}
+                        className="flex items-center gap-1 px-2.5 py-1 rounded bg-zinc-900 hover:bg-zinc-800 border border-white/[0.08] text-[11px] font-medium text-zinc-300 hover:text-white transition cursor-pointer"
+                        title="Ver ficha completa, notas e historial"
+                      >
+                        <Eye className="w-3 h-3 text-zinc-400" />
+                        <span className="hidden md:inline">Ver Ficha</span>
+                      </button>
+                    )}
+
                     {lead.perfil_url && (
                       <a
                         href={lead.perfil_url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        title="Ver en LinkedIn"
-                        className="p-1 rounded text-zinc-400 hover:text-white hover:bg-zinc-800 transition"
+                        className="p-1.5 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition"
+                        title="Ver perfil directo en LinkedIn"
                       >
-                        <ExternalLink className="w-3.5 h-3.5" />
+                        <ExternalLink className="w-4 h-4" />
                       </a>
                     )}
                   </div>
@@ -694,258 +839,355 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
               );
             })}
           </div>
+
+          {/* 4. PAGINACIÓN / FOOTER */}
+          <div className="p-3.5 bg-[#0D0E12] border-t border-white/[0.06] space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 flex-wrap">
+              <span className="text-xs text-zinc-400 font-mono">
+                {useClientPagination
+                  ? `Mostrando ${(safePage - 1) * resultsPerPage + 1} - ${Math.min(safePage * resultsPerPage, discoveredLeads.length)} de ${discoveredLeads.length} contactos`
+                  : `Mostrando página ${selectedPage} de resultados`}
+              </span>
+
+              {useClientPagination ? (
+                /* Paginación cliente para la extracción de red o lotes grandes */
+                <div className="flex items-center gap-3 flex-wrap">
+                  {/* Selector de items por página */}
+                  <div className="flex items-center gap-1.5 text-xs text-zinc-400">
+                    <span>Filas:</span>
+                    <div className="inline-flex rounded-md bg-zinc-900 p-0.5 border border-white/[0.06]">
+                      {[10, 20, 50].map((num) => (
+                        <button
+                          key={num}
+                          type="button"
+                          onClick={() => {
+                            setResultsPerPage(num);
+                            setResultsPage(1);
+                          }}
+                          className={`px-2 py-0.5 text-[11px] rounded transition cursor-pointer font-mono ${
+                            resultsPerPage === num
+                              ? 'bg-zinc-800 text-white font-medium'
+                              : 'text-zinc-400 hover:text-zinc-200'
+                          }`}
+                        >
+                          {num}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Botones de navegación */}
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      disabled={safePage <= 1}
+                      onClick={() => setResultsPage(1)}
+                      className="flex items-center gap-1 px-2 py-1 rounded bg-zinc-900 hover:bg-zinc-800 border border-white/[0.06] text-xs font-medium text-zinc-300 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition cursor-pointer"
+                      title="Primera página"
+                    >
+                      <ChevronsLeft className="w-3.5 h-3.5" />
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={safePage <= 1}
+                      onClick={() => setResultsPage(p => Math.max(1, p - 1))}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded bg-zinc-900 hover:bg-zinc-800 border border-white/[0.06] text-xs font-medium text-zinc-300 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition cursor-pointer"
+                      title="Página anterior"
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">Anterior</span>
+                    </button>
+
+                    <div className="flex items-center gap-1">
+                      {getWindowedPages(safePage, totalResultsPages).map((p, idx) => {
+                        if (p === '...') {
+                          return (
+                            <span key={`ellipsis-${idx}`} className="px-1 text-xs text-zinc-500 font-mono">
+                              ...
+                            </span>
+                          );
+                        }
+                        const isCurrent = p === safePage;
+                        return (
+                          <button
+                            key={p}
+                            type="button"
+                            onClick={() => setResultsPage(p)}
+                            className={`w-7 h-7 rounded text-xs font-mono font-medium transition cursor-pointer flex items-center justify-center ${
+                              isCurrent
+                                ? 'bg-white text-zinc-950 font-bold shadow-xs'
+                                : 'bg-zinc-900/60 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 border border-white/[0.04]'
+                            }`}
+                          >
+                            {p}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={safePage >= totalResultsPages}
+                      onClick={() => setResultsPage(p => Math.min(totalResultsPages, p + 1))}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded bg-zinc-900 hover:bg-zinc-800 border border-white/[0.06] text-xs font-medium text-zinc-300 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition cursor-pointer"
+                      title="Página siguiente"
+                    >
+                      <span className="hidden sm:inline">Siguiente</span>
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={safePage >= totalResultsPages}
+                      onClick={() => setResultsPage(totalResultsPages)}
+                      className="flex items-center gap-1 px-2 py-1 rounded bg-zinc-900 hover:bg-zinc-800 border border-white/[0.06] text-xs font-medium text-zinc-300 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition cursor-pointer"
+                      title="Última página"
+                    >
+                      <ChevronsRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                /* Paginación remota para búsqueda en vivo en LinkedIn */
+                <div className="flex items-center gap-1 flex-wrap">
+                  <button
+                    type="button"
+                    disabled={selectedPage <= 1 || extracting}
+                    onClick={() => handleGoToPage(1)}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-zinc-900 hover:bg-zinc-800 border border-white/[0.06] text-xs font-medium text-zinc-300 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition cursor-pointer"
+                    title="Ir a la primera página"
+                  >
+                    <ChevronsLeft className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Primera</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={selectedPage <= 1 || extracting}
+                    onClick={() => handleGoToPage(selectedPage - 1)}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-zinc-900 hover:bg-zinc-800 border border-white/[0.06] text-xs font-medium text-zinc-300 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition cursor-pointer"
+                    title="Página anterior"
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Anterior</span>
+                  </button>
+
+                  <div className="flex items-center gap-1">
+                    {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((num) => {
+                      const isCurrent = num === selectedPage;
+                      return (
+                        <button
+                          key={num}
+                          type="button"
+                          disabled={extracting}
+                          onClick={() => handleGoToPage(num)}
+                          className={`w-7 h-7 rounded-md text-xs font-mono font-medium transition cursor-pointer flex items-center justify-center ${
+                            isCurrent
+                              ? 'bg-white text-zinc-950 font-bold shadow-xs'
+                              : 'bg-zinc-900/60 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 border border-white/[0.04]'
+                          }`}
+                        >
+                          {num}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={selectedPage >= 10 || extracting}
+                    onClick={() => handleGoToPage(selectedPage + 1)}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-zinc-900 hover:bg-zinc-800 border border-white/[0.06] text-xs font-medium text-zinc-300 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition cursor-pointer"
+                    title="Página siguiente"
+                  >
+                    <span className="hidden sm:inline">Siguiente</span>
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Fila secundaria si es extracción de red: ampliar extracción */}
+            {isNetworkView && (
+              <div className="pt-2 border-t border-white/[0.04] flex items-center justify-between gap-3 text-xs text-zinc-400">
+                <span className="text-[11px] text-zinc-500">¿Quieres extraer un lote mayor directamente desde LinkedIn?</span>
+                <div className="flex items-center gap-1.5">
+                  {[20, 50, 100, 200].map((qty) => (
+                    <button
+                      key={qty}
+                      type="button"
+                      disabled={extractingNetwork}
+                      onClick={() => {
+                        setNetworkLimit(qty);
+                        handleExtractNetwork(networkSourceMode, qty);
+                      }}
+                      className={`px-2 py-0.5 text-[11px] rounded border transition cursor-pointer ${
+                        networkLimit === qty
+                          ? 'bg-blue-600 border-blue-500 text-white font-medium shadow-xs'
+                          : 'bg-zinc-900 border-white/[0.08] text-zinc-300 hover:text-white'
+                      }`}
+                      title={`Extraer hasta ${qty} contactos de LinkedIn`}
+                    >
+                      {qty}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
-      {/* Toolbar y Tabla de Prospectos */}
-      <div className="rounded-xl border border-white/[0.08] bg-[#121316] overflow-hidden">
-        <div className="p-3.5 border-b border-white/[0.06] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5">
-            <h2 className="text-xs font-medium text-zinc-100 tracking-tight">Directorio de Prospectos</h2>
-            <span className="px-2 py-0.5 rounded text-[10px] font-mono text-zinc-400 bg-white/[0.03] border border-white/[0.06]">
-              {filteredProspects.length} registrados
-            </span>
-          </div>
+      {/* MODAL: GUARDAR EN UNA O MÚLTIPLES LISTAS DE LEADS A LA VEZ */}
+      {showSaveToListsModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fadeIn font-sans">
+          <div className="bg-[#121316] border border-white/[0.08] rounded-xl max-w-lg w-full p-5 space-y-4 shadow-2xl flex flex-col max-h-[85vh]">
+            <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-7 h-7 rounded-md bg-white/[0.04] border border-white/[0.08] flex items-center justify-center text-zinc-300">
+                  <Layers className="w-3.5 h-3.5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold text-zinc-100">
+                    Guardar en Listas de Leads
+                  </h3>
+                  <p className="text-[11px] text-zinc-400">
+                    Selecciona una o varias listas de destino para estos {selectedDiscoveredUrls.size} prospectos
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowSaveToListsModal(false)}
+                className="text-zinc-500 hover:text-zinc-300 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
 
-          <div className="flex items-center gap-2 flex-wrap">
-            {/* Buscador */}
-            <form onSubmit={handleSearch} className="relative">
-              <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Buscar por nombre, empresa o cargo..."
-                className="bg-[#0D0E12] border border-white/[0.08] pl-8 pr-3 py-1.5 rounded-md text-xs text-zinc-100 placeholder-zinc-500 w-48 sm:w-60 focus:outline-none focus:border-zinc-500 font-sans"
-              />
-            </form>
-
-            {/* Pestañas de Filtro por Estado */}
-            <div className="flex items-center bg-[#0D0E12] p-0.5 rounded-md border border-white/[0.08] text-[11px]">
-              {[
-                { id: '', label: 'Todos' },
-                { id: 'EXTRAIDO', label: 'En Cola' },
-                { id: 'INVITACION_ENVIADA', label: 'Invitados' },
-                { id: 'CONECTADO', label: 'Conectados' },
-                { id: 'REUNION_AGENDADA', label: 'Reuniones Agendadas' },
-              ].map((tab) => (
+            <div className="space-y-2 flex-1 overflow-y-auto pr-1">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-zinc-300">Listas disponibles en tu workspace:</span>
                 <button
-                  key={tab.id}
-                  onClick={() => setActiveFilter(tab.id)}
-                  className={`px-2.5 py-1 rounded transition cursor-pointer ${
-                    activeFilter === tab.id
-                      ? 'bg-zinc-800 text-zinc-100 font-medium shadow-xs'
-                      : 'text-zinc-400 hover:text-zinc-200'
-                  }`}
+                  type="button"
+                  onClick={() => setShowNewListModal(true)}
+                  className="text-xs text-zinc-300 hover:text-white flex items-center gap-1 font-medium cursor-pointer"
                 >
-                  {tab.label}
+                  <Plus className="w-3 h-3" />
+                  <span>Crear nueva lista</span>
                 </button>
-              ))}
-            </div>
+              </div>
 
-            {/* Botón Refrescar */}
-            <button
-              onClick={loadData}
-              title="Refrescar lista"
-              className="p-1.5 rounded-md bg-[#0D0E12] border border-white/[0.08] hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-            </button>
-          </div>
-        </div>
-
-        {/* Barra contextual de selección múltiple */}
-        {selectedDirectoryIds.size > 0 && (
-          <div className="bg-white/[0.03] border-b border-white/[0.06] px-4 py-2 flex items-center justify-between gap-3 animate-in fade-in">
-            <div className="flex items-center gap-2 text-xs text-zinc-300">
-              <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span>
-              <span className="font-medium text-zinc-100">{selectedDirectoryIds.size}</span>
-              <span className="text-zinc-400">prospectos seleccionados</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setSelectedDirectoryIds(new Set())}
-                className="px-2.5 py-1 rounded-md text-[11px] text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition cursor-pointer"
-              >
-                Deseleccionar
-              </button>
-              <button
-                type="button"
-                onClick={handleDeleteBatch}
-                disabled={isDeletingBatch}
-                className="flex items-center gap-1.5 px-3 py-1 rounded-md bg-rose-950/40 hover:bg-rose-900/50 text-rose-300 border border-rose-800/40 text-xs font-medium transition cursor-pointer disabled:opacity-50"
-              >
-                <Trash2 className={`w-3.5 h-3.5 ${isDeletingBatch ? 'animate-spin' : ''}`} />
-                <span>{isDeletingBatch ? 'Eliminando...' : `Eliminar (${selectedDirectoryIds.size})`}</span>
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Tabla */}
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs border-collapse">
-            <thead>
-              <tr className="border-b border-white/[0.06] bg-[#0F1014] text-zinc-400 text-[11px] font-medium tracking-tight">
-                <th className="py-2.5 px-4 w-10">
-                  <input
-                    type="checkbox"
-                    checked={filteredProspects.length > 0 && selectedDirectoryIds.size === filteredProspects.length}
-                    onChange={handleToggleSelectAllDirectory}
-                    className="w-3.5 h-3.5 rounded border-zinc-700 bg-zinc-900 accent-zinc-200 cursor-pointer"
-                    title="Seleccionar todos los visibles"
-                  />
-                </th>
-                <th className="py-2.5 px-3">Prospecto / Contacto</th>
-                <th className="py-2.5 px-3">Cargo / Puesto Actual</th>
-                <th className="py-2.5 px-3">Empresa / Organización</th>
-                <th className="py-2.5 px-3">Ubicación</th>
-                <th className="py-2.5 px-3">Red</th>
-                <th className="py-2.5 px-3">Estado</th>
-                <th className="py-2.5 px-4 text-right">Acciones</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/[0.04]">
-              {loading ? (
-                <tr>
-                  <td colSpan={8} className="py-8 text-center text-zinc-500">
-                    Cargando prospectos...
-                  </td>
-                </tr>
-              ) : filteredProspects.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="py-8 text-center text-zinc-500">
-                    No se encontraron prospectos con este criterio.
-                  </td>
-                </tr>
+              {leadLists.length === 0 ? (
+                <div className="p-6 text-center text-zinc-500 text-xs border border-white/[0.06] rounded-lg space-y-2">
+                  <p>Aún no tienes listas creadas.</p>
+                  <button
+                    onClick={() => setShowNewListModal(true)}
+                    className="px-3 py-1.5 rounded-md bg-white text-zinc-950 font-medium text-xs cursor-pointer"
+                  >
+                    Crear primera lista
+                  </button>
+                </div>
               ) : (
-                filteredProspects.map((prospect) => {
-                  const stateBadgeStyles = {
-                    EXTRAIDO: 'bg-white/[0.04] text-zinc-400 border-white/[0.08]',
-                    INVITACION_ENVIADA: 'bg-emerald-950/20 text-emerald-400 border-emerald-500/20',
-                    INVITACION_PENDIENTE: 'bg-amber-950/20 text-amber-300 border-amber-500/20',
-                    CONECTADO: 'bg-zinc-800 text-zinc-200 border-zinc-700/60',
-                    REUNION_AGENDADA: 'bg-emerald-950/30 text-emerald-300 border-emerald-500/30 font-medium',
-                  }[prospect.estado] || 'bg-white/[0.04] text-zinc-400 border-white/[0.08]';
+                <div className="space-y-1.5">
+                  {leadLists.map((list) => {
+                    const isChecked = selectedTargetListIds.has(list.id);
+                    const connectedSeqsCount = list.secuencias_conectadas ? list.secuencias_conectadas.length : 0;
 
-                  const isSelected = selectedDirectoryIds.has(prospect.id);
-                  const isRecentlySynced = recentlySyncedIds.has(prospect.id);
-
-                  return (
-                    <tr 
-                      key={prospect.id}
-                      onClick={() => setSelectedProspect(prospect)}
-                      className={`transition-colors duration-500 cursor-pointer group ${
-                        isRecentlySynced
-                          ? 'bg-emerald-500/15'
-                          : isSelected 
-                          ? 'bg-white/[0.04]' 
-                          : 'hover:bg-white/[0.02]'
-                      }`}
-                    >
-                      <td className="py-3 px-4 w-10" onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={(e) => handleToggleSelectDirectoryLead(prospect.id, e)}
-                          className="w-3.5 h-3.5 rounded border-zinc-700 bg-zinc-900 accent-zinc-200 cursor-pointer"
-                        />
-                      </td>
-
-                      <td className="py-3 px-3">
-                        <div className="font-medium text-zinc-200 group-hover:text-white transition">
-                          {prospect.nombre}
+                    return (
+                      <div
+                        key={list.id}
+                        onClick={() => handleToggleTargetList(list.id)}
+                        className={`p-3 rounded-lg border transition flex items-center justify-between gap-3 cursor-pointer ${
+                          isChecked
+                            ? 'bg-zinc-800/60 border-white/[0.18]'
+                            : 'bg-zinc-900/40 border-white/[0.06] hover:border-white/[0.12]'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => handleToggleTargetList(list.id)}
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-4 h-4 rounded border-zinc-700 bg-zinc-900 text-zinc-100 focus:ring-0 cursor-pointer accent-zinc-200 shrink-0"
+                          />
+                          <div className="min-w-0">
+                            <div className="font-medium text-xs text-zinc-200 truncate">
+                              {list.nombre}
+                            </div>
+                            {list.descripcion && (
+                              <p className="text-[11px] text-zinc-400 truncate max-w-xs mt-0.5">
+                                {list.descripcion}
+                              </p>
+                            )}
+                          </div>
                         </div>
-                        <div className="text-[11px] text-zinc-400 line-clamp-1 italic" title={prospect.cargo_titular || prospect.cargo}>
-                          {prospect.cargo_titular || prospect.cargo || 'Titular de LinkedIn'}
-                        </div>
-                      </td>
 
-                      <td className="py-3 px-3">
-                        <div className="flex items-center gap-1.5">
-                          <Briefcase className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                          <span className="font-medium text-xs text-zinc-100 truncate max-w-[210px]" title={prospect.cargo_actual || prospect.cargo}>
-                            {prospect.cargo_actual || prospect.cargo || 'Profesional / Decisor'}
+                        <div className="flex items-center gap-2 shrink-0">
+                          {connectedSeqsCount > 0 && (
+                            <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-950/40 text-emerald-400 border border-emerald-500/20 font-mono">
+                              ⚡ {connectedSeqsCount} {connectedSeqsCount === 1 ? 'secuencia' : 'secuencias'}
+                            </span>
+                          )}
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-zinc-900 text-zinc-400 border border-white/[0.06]">
+                            {list.total_leads || 0} leads
                           </span>
                         </div>
-                      </td>
-
-                      <td className="py-3 px-3 text-zinc-300">
-                        <div className="flex items-center gap-1.5">
-                          <Building2 className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
-                          <span className="truncate max-w-xs">{prospect.institucion || 'Organización no declarada'}</span>
-                        </div>
-                      </td>
-
-                      <td className="py-3 px-3 text-zinc-400 text-[11px]">
-                        {prospect.ubicacion || 'Chile'}
-                      </td>
-
-                      <td className="py-3 px-3 font-mono text-[11px] text-zinc-400">
-                        {prospect.grado_red || '2°/3°'}
-                      </td>
-
-                      <td className="py-3 px-3">
-                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono border ${stateBadgeStyles}`}>
-                          {prospect.estado === 'REUNION_AGENDADA' ? '📅 Cita Agendada' : prospect.estado}
-                        </span>
-                      </td>
-
-                      <td className="py-3 px-4 text-right">
-                        <div className="flex items-center justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
-                          {prospect.url_perfil && (
-                            <button
-                              onClick={(e) => handleSyncSingleProspect(prospect, e)}
-                              disabled={syncingLeadIds.has(prospect.id)}
-                              title="Sincronizar cargo, empresa y titular en vivo desde LinkedIn"
-                              className="p-1 rounded text-zinc-400 hover:text-emerald-400 hover:bg-zinc-800 transition cursor-pointer disabled:opacity-50"
-                            >
-                              <RefreshCw className={`w-3.5 h-3.5 ${syncingLeadIds.has(prospect.id) ? 'animate-spin text-emerald-400' : ''}`} />
-                            </button>
-                          )}
-                          {prospect.url_perfil && (
-                            <a
-                              href={prospect.url_perfil}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              title="Abrir perfil de LinkedIn"
-                              className="p-1 rounded text-zinc-400 hover:text-white hover:bg-zinc-800 transition"
-                            >
-                              <ExternalLink className="w-3.5 h-3.5" />
-                            </a>
-                          )}
-                          <button
-                            onClick={() => setSelectedProspect(prospect)}
-                            className="flex items-center gap-1 px-2 py-1 rounded-md bg-white/[0.04] hover:bg-white/[0.08] text-zinc-300 border border-white/[0.06] text-[11px] transition cursor-pointer"
-                          >
-                            <span>Ver</span>
-                            <ChevronRight className="w-3 h-3" />
-                          </button>
-                          <button
-                            onClick={(e) => handleDeleteSingleProspect(prospect, e)}
-                            title="Eliminar de mi base de datos"
-                            className="p-1 rounded text-zinc-500 hover:text-rose-400 hover:bg-rose-950/40 transition cursor-pointer"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
+                      </div>
+                    );
+                  })}
+                </div>
               )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+            </div>
 
-      {/* Modal Lateral de Detalle */}
-      {selectedProspect && (
+            <div className="pt-3 border-t border-white/[0.06] flex items-center justify-between gap-2">
+              <span className="text-[11px] text-zinc-400 font-mono">
+                {selectedTargetListIds.size} {selectedTargetListIds.size === 1 ? 'lista elegida' : 'listas elegidas'}
+              </span>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowSaveToListsModal(false)}
+                  className="px-3 py-1.5 rounded-md text-xs font-medium text-zinc-400 hover:text-zinc-200 cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmSaveToLists}
+                  disabled={importingSelected || selectedTargetListIds.size === 0 || leadLists.length === 0}
+                  className="px-4 py-1.5 rounded-md bg-white hover:bg-zinc-200 text-zinc-950 text-xs font-semibold shadow-sm transition cursor-pointer disabled:opacity-40"
+                >
+                  {importingSelected 
+                    ? 'Guardando...' 
+                    : `Guardar en ${selectedTargetListIds.size} ${selectedTargetListIds.size === 1 ? 'Lista' : 'Listas'}`}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal para crear una nueva lista de prospectos */}
+      {showNewListModal && (
+        <NewListModal
+          onClose={() => setShowNewListModal(false)}
+          onCreated={async () => {
+            setShowNewListModal(false);
+            await loadLists();
+          }}
+          activeTenantWorkspace={activeTenantWorkspace}
+        />
+      )}
+
+      {/* Modal de Detalle de Lead */}
+      {selectedProspectForModal && (
         <LeadModal
-          prospect={selectedProspect}
-          onClose={() => setSelectedProspect(null)}
-          onUpdated={handleProspectUpdated}
+          prospect={selectedProspectForModal}
+          onClose={() => setSelectedProspectForModal(null)}
+          onUpdated={() => {}}
         />
       )}
     </div>

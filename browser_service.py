@@ -13,10 +13,10 @@ MCP_URL = "http://127.0.0.1:9010/mcp"
 ELECTRON_BASE_URL = "http://127.0.0.1:9099"
 
 URL_LINKEDIN = "https://www.linkedin.com/feed/"
-URL_ZOHO_CRM = "https://crm.zoho.com/crm/org902879914/tab/Leads"
+URL_ZOHO_CRM = "https://crm.zoho.com/crm/org902879914/tab/Home"
 
 def get_electron_status() -> dict:
-    """Queries detailed Electron status (LinkedIn session, cookies, visibility)."""
+    """Consulta el estado detallado de Electron (sesión de LinkedIn, sesión de WhatsApp, cookies, visibilidad)."""
     try:
         req = urllib.request.Request(f"{ELECTRON_BASE_URL}/status", method="GET")
         with urllib.request.urlopen(req, timeout=0.8) as res:
@@ -24,22 +24,112 @@ def get_electron_status() -> dict:
                 return json.loads(res.read().decode("utf-8"))
     except Exception:
         pass
-    return {"ok": False, "running": False, "sesion_linkedin_activa": False}
+    return {"ok": False, "running": False, "sesion_linkedin_activa": False, "sesion_whatsapp_activa": False}
 
 def is_electron_running() -> bool:
-    """Verifies whether the Electron desktop container (Isolated Chromium) is running."""
+    """Verifica si el contenedor de escritorio Electron (Chromium aislado) está en ejecución."""
     status = get_electron_status()
     return bool(status.get("ok"))
 
 def verify_linkedin_session() -> bool:
-    """Verifies whether LinkedIn is authenticated in Electron."""
+    """Verifica si la sesión de LinkedIn está autenticada en Electron."""
     if is_electron_running():
         status = get_electron_status()
         return bool(status.get("sesion_linkedin_activa"))
     return False
 
+def verify_whatsapp_session() -> bool:
+    """Verifica si la sesión de WhatsApp Web está autenticada en Electron."""
+    if is_electron_running():
+        status = get_electron_status()
+        return bool(status.get("sesion_whatsapp_activa"))
+    return False
+
+def verify_zoho_session() -> bool:
+    """Verifica si la sesión de Zoho CRM está autenticada en Electron."""
+    if is_electron_running():
+        status = get_electron_status()
+        return bool(status.get("sesion_zoho_activa"))
+    return False
+
+def start_electron_worker(session_token: Optional[str] = None, tenant_id: Optional[str] = None) -> dict:
+    """Instruye al runner de fondo en Electron para que inicie su ciclo autónomo con la sesión autenticada."""
+    try:
+        payload = {}
+        if session_token:
+            payload["session_token"] = session_token
+        if tenant_id:
+            payload["tenant_id"] = tenant_id
+        data_bytes = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(f"{ELECTRON_BASE_URL}/worker/start", data=data_bytes, headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=2.0) as res:
+            return json.loads(res.read().decode("utf-8"))
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+def stop_electron_worker() -> dict:
+    """Instruye al runner de fondo en Electron para que pause su ciclo autónomo."""
+    try:
+        req = urllib.request.Request(f"{ELECTRON_BASE_URL}/worker/stop", data=b"{}", headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=2.0) as res:
+            return json.loads(res.read().decode("utf-8"))
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+def sync_electron_worker_session(session_token: Optional[str] = None, tenant_id: Optional[str] = None) -> dict:
+    """Sincroniza el contexto de sesión autenticada con el runner de Electron sin alterar su estado de pausa."""
+    try:
+        payload = {
+            "session_token": session_token,
+            "tenant_id": tenant_id
+        }
+        data_bytes = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(f"{ELECTRON_BASE_URL}/worker/session", data=data_bytes, headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=1.5) as res:
+            return json.loads(res.read().decode("utf-8"))
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+def clear_electron_worker_session() -> dict:
+    """Invalida la sesión activa en el runner de Electron y detiene el polling inmediatamente."""
+    try:
+        req = urllib.request.Request(f"{ELECTRON_BASE_URL}/worker/logout", data=b"{}", headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=1.5) as res:
+            return json.loads(res.read().decode("utf-8"))
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+def force_electron_worker_next(session_token: Optional[str] = None, tenant_id: Optional[str] = None) -> dict:
+    """Fuerza al bucle del runner en Electron a omitir la espera y ejecutar de inmediato el próximo ciclo."""
+    try:
+        payload = {}
+        if session_token:
+            payload["session_token"] = session_token
+        if tenant_id:
+            payload["tenant_id"] = tenant_id
+        data_bytes = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(f"{ELECTRON_BASE_URL}/worker/forzar-siguiente", data=data_bytes, headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=3.0) as res:
+            return json.loads(res.read().decode("utf-8"))
+    except Exception as e:
+        try:
+            stop_res = stop_electron_worker()
+            start_res = start_electron_worker(session_token=session_token, tenant_id=tenant_id)
+            return {"ok": True, "method": "restart_fallback", "stop": stop_res, "start": start_res}
+        except Exception as e2:
+            return {"ok": False, "error": f"Fallo principal ({e}) y fallback ({e2})"}
+
+def get_electron_worker_status() -> dict:
+    """Consulta el estado actual del bucle del runner autónomo de Electron."""
+    try:
+        req = urllib.request.Request(f"{ELECTRON_BASE_URL}/worker/status", method="GET")
+        with urllib.request.urlopen(req, timeout=2.0) as res:
+            return json.loads(res.read().decode("utf-8"))
+    except Exception as e:
+        return {"ok": False, "error": str(e), "status": {"activo": False, "estado_actual": "En reposo"}}
+
 def is_browseros_running() -> bool:
-    """Verifies whether embedded Chromium (Electron) or BrowserOS are running."""
+    """Verifica si Chromium embebido (Electron) o BrowserOS están en ejecución."""
     if is_electron_running():
         return True
 
@@ -65,7 +155,7 @@ def is_browseros_running() -> bool:
         return False
 
 def _call_mcp_tabs_new(url: str):
-    """Calls BrowserOS MCP API to open a background tab."""
+    """Invoca la API MCP de BrowserOS para abrir una pestaña en segundo plano."""
     try:
         # 1. Initialize MCP session
         init_payload = json.dumps({
@@ -75,7 +165,7 @@ def _call_mcp_tabs_new(url: str):
             "params": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
-                "clientInfo": {"name": "dripify-local", "version": "1.0"}
+                "clientInfo": {"name": "nexusreach-local", "version": "1.0"}
             }
         }).encode("utf-8")
 
@@ -144,24 +234,36 @@ def _call_mcp_tabs_new(url: str):
         print(f"[BrowserService] Error invocando MCP tabs: {e}")
         return False
 
-def open_url(url: str) -> dict:
+def open_url(url: str, force: bool = False) -> dict:
     """
-    Opens URL in the active work browser.
-    If Electron is active (embedded Chromium), navigates internally.
-    If BrowserOS is active, sends navigation request via MCP.
+    Abre una URL en el navegador de trabajo activo.
+    Si Electron está activo (Chromium embebido), navega internamente.
+    Si BrowserOS está activo, envía la petición de navegación vía MCP.
     """
     if is_electron_running():
         try:
-            status = get_electron_status()
-            current_url = status.get("url", "").split("?")[0].rstrip("/")
-            target_clean = url.split("?")[0].rstrip("/")
-            if current_url and current_url == target_clean:
-                return {
-                    "status": "ok",
-                    "metodo": "electron_isolated_current",
-                    "mensaje": f"Pestaña ya posicionada en: {url}",
-                    "url": url
-                }
+            if not force:
+                status = get_electron_status()
+                current_raw = (status.get("url") or "").rstrip("/")
+                target_raw = (url or "").rstrip("/")
+
+                # Solo para perfiles individuales (/in/) ignoramos parámetros de tracking como ?miniProfileUrn=...
+                # Para búsquedas (/search/) o cualquier otra URL, los parámetros query (keywords, etc.) son esenciales
+                is_already_there = False
+                if "/in/" in target_raw.lower() and "/search/" not in target_raw.lower():
+                    current_base = current_raw.split("?")[0].rstrip("/")
+                    target_base = target_raw.split("?")[0].rstrip("/")
+                    is_already_there = bool(current_base and target_base and current_base == target_base)
+                else:
+                    is_already_there = bool(current_raw and target_raw and current_raw == target_raw)
+
+                if is_already_there:
+                    return {
+                        "status": "ok",
+                        "metodo": "electron_isolated_current",
+                        "mensaje": f"Pestaña ya posicionada en: {url}",
+                        "url": url
+                    }
 
             req = urllib.request.Request(
                 f"{ELECTRON_BASE_URL}/navigate",
@@ -214,7 +316,7 @@ def open_url(url: str) -> dict:
 
 def start_work_sessions(urls: Optional[List[str]] = None) -> dict:
     """
-    Initiates or activates BrowserOS by opening work tabs for LinkedIn and Zoho CRM.
+    Inicia o activa el navegador de trabajo abriendo pestañas para LinkedIn y Zoho CRM.
     """
     targets = urls or [URL_LINKEDIN, URL_ZOHO_CRM]
     
@@ -258,11 +360,11 @@ _MCP_HEADERS = {"Content-Type": "application/json", "Accept": "application/json,
 _work_page_id: Optional[int] = None
 
 def _mcp_open_session() -> Optional[str]:
-    """Initializes an MCP session and returns session-id."""
+    """Inicializa una sesión MCP y retorna el identificador de sesión."""
     init_payload = json.dumps({
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
         "params": {"protocolVersion": "2024-11-05", "capabilities": {},
-                   "clientInfo": {"name": "dripify-local", "version": "1.0"}}
+                   "clientInfo": {"name": "nexusreach-local", "version": "1.0"}}
     }).encode("utf-8")
     req = urllib.request.Request(MCP_URL, data=init_payload, headers=_MCP_HEADERS)
     with urllib.request.urlopen(req, timeout=2.5) as res:
@@ -278,10 +380,10 @@ def _mcp_open_session() -> Optional[str]:
     return session_id
 
 def _mcp_tool_text(session_id: str, tool: str, arguments: dict, timeout: float = 10.0) -> str:
-    """Invokes an MCP tool and returns concatenated response text."""
+    """Invoca una herramienta MCP y retorna la respuesta de texto concatenada."""
     payload = json.dumps({
         "jsonrpc": "2.0", "id": 2, "method": "tools/call",
-        "params": {"name": tool, "arguments": {"agentName": "dripify", **arguments}}
+        "params": {"name": tool, "arguments": {"agentName": "nexusreach", **arguments}}
     }).encode("utf-8")
     req = urllib.request.Request(MCP_URL, data=payload, headers={**_MCP_HEADERS, "mcp-session-id": session_id})
     with urllib.request.urlopen(req, timeout=timeout) as res:
@@ -302,15 +404,15 @@ def _mcp_tool_text(session_id: str, tool: str, arguments: dict, timeout: float =
     return "\n".join(text_list)
 
 def _unwrap_untrusted(txt: str) -> str:
-    """Removes [UNTRUSTED_PAGE_CONTENT ...] wrapper added by BrowserOS."""
+    """Remueve la envoltura [UNTRUSTED_PAGE_CONTENT ...] añadida por BrowserOS."""
     m = re.search(r'\[UNTRUSTED_PAGE_CONTENT[^\]]*\][^\n]*\n([\s\S]*?)\[END_UNTRUSTED_PAGE_CONTENT', txt)
     return m.group(1).strip() if m else txt.strip()
 
 def open_profile_in_browseros(profile_url: str, name: str = "") -> dict:
     """
-    Navigates work tab to the specified profile.
-    If Electron is active, navigates in its isolated embedded Chromium.
-    If BrowserOS is active, navigates via MCP.
+    Navega la pestaña de trabajo al perfil indicado.
+    Si Electron está activo, navega en su Chromium embebido aislado.
+    Si BrowserOS está activo, navega vía MCP.
     """
     global _work_page_id
     if not profile_url:
@@ -362,28 +464,17 @@ def open_profile_in_browseros(profile_url: str, name: str = "") -> dict:
     except Exception as e:
         return {"status": "error", "detail": str(e)}
 
-def _call_mcp_evaluate(script: str, page_id: Optional[int] = None) -> dict:
+def _call_mcp_evaluate(script: str, page_id: Optional[int] = None, channel: Optional[str] = None) -> dict:
     """
-    Executes JavaScript in the work browser and returns parsed result.
-    If Electron is active, executes directly in embedded Chromium.
-    If BrowserOS is active, executes via MCP.
+    Ejecuta JavaScript únicamente en entornos BrowserOS locales de desarrollo legacy vía MCP.
+    En Electron (Chromium aislado), la evaluación arbitraria de JavaScript está bloqueada por directriz C-01.
     """
     if is_electron_running():
-        try:
-            req = urllib.request.Request(
-                f"{ELECTRON_BASE_URL}/evaluate",
-                data=json.dumps({"script": script}).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST"
-            )
-            with urllib.request.urlopen(req, timeout=15.0) as res:
-                data = json.loads(res.read().decode("utf-8"))
-                if data.get("ok"):
-                    res_val = data.get("result")
-                    return res_val if isinstance(res_val, dict) else {"ok": True, "value": res_val}
-                return {"ok": False, "error": data.get("error", "Error desconocido en Electron")}
-        except Exception as e:
-            return {"ok": False, "error": f"Fallo evaluando en Electron: {e}"}
+        # Regla C-01 / Directrices v1.3: La evaluación remota arbitraria en Electron está revocada
+        return {
+            "ok": False,
+            "error": "ACCESO_DENEGADO (C-01): La evaluación remota arbitraria de JavaScript en Electron está revocada. Use funciones precompiladas locales o comandos firmados Ed25519."
+        }
 
     target = page_id if page_id is not None else _work_page_id
     if target is None:
@@ -407,11 +498,18 @@ def _call_mcp_evaluate(script: str, page_id: Optional[int] = None) -> dict:
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-def show_work_browser(url: Optional[str] = None) -> dict:
-    """Shows the embedded Chromium window in Electron for login or visual monitoring."""
+def show_work_browser(url: Optional[str] = None, channel: Optional[str] = None) -> dict:
+    """Muestra la ventana de Chromium embebido en Electron para login o monitoreo visual."""
     if is_electron_running():
         try:
-            payload = json.dumps({"url": url} if url else {}).encode("utf-8")
+            body = {}
+            if url:
+                body["url"] = url
+            if channel:
+                body["channel"] = channel
+            elif url and "whatsapp" in url.lower():
+                body["channel"] = "whatsapp"
+            payload = json.dumps(body).encode("utf-8")
             req = urllib.request.Request(f"{ELECTRON_BASE_URL}/show", data=payload, headers={"Content-Type": "application/json"}, method="POST")
             with urllib.request.urlopen(req, timeout=3.0) as res:
                 return json.loads(res.read().decode("utf-8"))
@@ -419,25 +517,140 @@ def show_work_browser(url: Optional[str] = None) -> dict:
             return {"ok": False, "error": str(e)}
     return {"ok": False, "error": "Electron no está activo"}
 
-def hide_work_browser() -> dict:
-    """Hides the embedded Chromium window in Electron."""
+def extract_network_from_electron(source: str = "all", limit: int = 50) -> dict:
+    """
+    Invoca la extracción precompilada segura de red en Chromium (Electron).
+    source: 'all', 'connections', o 'sent_invitations'.
+    limit: Cantidad objetivo de contactos a extraer de la cola (default 50).
+    """
     if is_electron_running():
         try:
-            req = urllib.request.Request(f"{ELECTRON_BASE_URL}/hide", data=b"{}", headers={"Content-Type": "application/json"}, method="POST")
+            body = json.dumps({"source": source, "limit": limit}).encode("utf-8")
+            req = urllib.request.Request(
+                f"{ELECTRON_BASE_URL}/extract/network",
+                data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=90.0) as res:
+                return json.loads(res.read().decode("utf-8"))
+        except Exception as e:
+            return {"success": False, "error": str(e), "leads": []}
+    return {"success": False, "error": "Electron no está activo", "leads": []}
+
+def enrich_profile_from_electron(profile_url: str) -> dict:
+    """
+    Invoca la extracción y enriquecimiento precompilado seguro de perfil en vivo en Chromium (Electron).
+    profile_url: URL pública o directa del perfil de LinkedIn.
+    """
+    if is_electron_running():
+        try:
+            body = json.dumps({"profile_url": profile_url}).encode("utf-8")
+            req = urllib.request.Request(
+                f"{ELECTRON_BASE_URL}/extract/profile",
+                data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=45.0) as res:
+                return json.loads(res.read().decode("utf-8"))
+        except Exception as e:
+            return {"ok": False, "success": False, "error": str(e)}
+    return {"ok": False, "success": False, "error": "Electron no está activo"}
+
+def extract_contact_info_from_electron(profile_url: str) -> dict:
+    """
+    Invoca la extracción precompilada segura de información de contacto de 1er grado (overlay) en Electron.
+    profile_url: URL del perfil de LinkedIn.
+    """
+    if is_electron_running():
+        try:
+            body = json.dumps({"profile_url": profile_url}).encode("utf-8")
+            req = urllib.request.Request(
+                f"{ELECTRON_BASE_URL}/extract/contact-info",
+                data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=30.0) as res:
+                return json.loads(res.read().decode("utf-8"))
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    return {"success": False, "error": "Electron no está activo"}
+
+def hide_work_browser(channel: Optional[str] = None) -> dict:
+    """Oculta la ventana de Chromium embebido en Electron."""
+    if is_electron_running():
+        try:
+            body = {"channel": channel} if channel else {}
+            payload = json.dumps(body).encode("utf-8")
+            req = urllib.request.Request(f"{ELECTRON_BASE_URL}/hide", data=payload, headers={"Content-Type": "application/json"}, method="POST")
             with urllib.request.urlopen(req, timeout=3.0) as res:
                 return json.loads(res.read().decode("utf-8"))
         except Exception as e:
             return {"ok": False, "error": str(e)}
     return {"ok": False, "error": "Electron no está activo"}
 
-# ==========================================
-# BACKWARD COMPATIBILITY ALIASES
-# ==========================================
-obtener_estado_electron = get_electron_status
-verificar_sesion_linkedin = verify_linkedin_session
-abrir_perfil_en_browseros = open_profile_in_browseros
-abrir_url = open_url
-iniciar_sesiones_trabajo = start_work_sessions
-mostrar_navegador_trabajo = show_work_browser
-ocultar_navegador_trabajo = hide_work_browser
-call_mcp_evaluate = _call_mcp_evaluate
+def logout_zoho() -> dict:
+    """Cierra la sesión de Zoho CRM, purga cookies/almacenamiento y regresa al formulario de acceso."""
+    if is_electron_running():
+        try:
+            req = urllib.request.Request(
+                f"{ELECTRON_BASE_URL}/zoho/logout",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=3.0) as res:
+                return json.loads(res.read().decode("utf-8"))
+        except Exception:
+            # Fallback inmediato si el proceso de Electron es previo al hot-update del endpoint
+            try:
+                clear_js = """
+                (() => {
+                    try {
+                        document.cookie.split(';').forEach(c => {
+                            const eq = c.indexOf('=');
+                            const name = eq > -1 ? c.substring(0, eq).trim() : c.trim();
+                            document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=.zoho.com';
+                            document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=crm.zoho.com';
+                            document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=accounts.zoho.com';
+                            document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;';
+                        });
+                        localStorage.clear();
+                        sessionStorage.clear();
+                    } catch(e) {}
+                    window.location.href = 'https://accounts.zoho.com/signin?servicename=ZohoCRM';
+                    return { ok: true };
+                })()
+                """
+                _call_mcp_evaluate(clear_js, channel="zoho")
+                
+                # 2. Navegar a logout de Zoho Accounts para matar la sesión SSO del servidor
+                try:
+                    nav_logout = json.dumps({"channel": "zoho", "url": "https://accounts.zoho.com/logout"}).encode("utf-8")
+                    req1 = urllib.request.Request(f"{ELECTRON_BASE_URL}/navigate", data=nav_logout, headers={"Content-Type": "application/json"}, method="POST")
+                    urllib.request.urlopen(req1, timeout=8.0)
+                except Exception:
+                    pass
+
+                # 3. Navegar a la pantalla oficial de signin
+                try:
+                    nav_signin = json.dumps({"channel": "zoho", "url": "https://accounts.zoho.com/signin?servicename=ZohoCRM"}).encode("utf-8")
+                    req2 = urllib.request.Request(f"{ELECTRON_BASE_URL}/navigate", data=nav_signin, headers={"Content-Type": "application/json"}, method="POST")
+                    urllib.request.urlopen(req2, timeout=8.0)
+                except Exception:
+                    pass
+
+                try:
+                    show_body = json.dumps({"channel": "zoho"}).encode("utf-8")
+                    req_show = urllib.request.Request(f"{ELECTRON_BASE_URL}/show", data=show_body, headers={"Content-Type": "application/json"}, method="POST")
+                    urllib.request.urlopen(req_show, timeout=3.0)
+                except Exception:
+                    pass
+
+                return {"ok": True, "fallback": True, "mensaje": "Sesión de Zoho reiniciada exitosamente"}
+            except Exception as eval_err:
+                return {"ok": False, "error": str(eval_err)}
+    return {"ok": False, "error": "Electron no está activo"}
+

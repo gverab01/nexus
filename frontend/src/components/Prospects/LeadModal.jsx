@@ -17,21 +17,31 @@ import {
   CalendarCheck,
   Sparkles,
   Briefcase,
-  RefreshCw
+  RefreshCw,
+  ShieldCheck,
+  Layers,
+  DollarSign,
+  UserCheck,
+  Database
 } from 'lucide-react';
-import { saveLeadContact, fetchLeadDetail, deleteProspect, markLeadMeeting, syncLeadWithLinkedIn } from '../../services/api';
+import { saveLeadContact, fetchLeadDetail, deleteProspect, markLeadMeeting, syncLeadWithLinkedIn, resolveLeadEmail } from '../../services/api';
 
-export default function LeadModal({ prospect, onClose, onUpdated }) {
-  const [leadData, setLeadData] = useState(prospect);
+export default function LeadModal({ prospect, lead, onClose, onUpdated, onLeadUpdated }) {
+  const rawLead = prospect || lead || {};
+  const activeLead = { ...rawLead, id: rawLead.id || rawLead.lead_id };
+  const notifyUpdated = onUpdated || onLeadUpdated;
+  const [leadData, setLeadData] = useState(activeLead);
   const [activeTab, setActiveTab] = useState('resumen');
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState(null);
-  const [emailInput, setEmailInput] = useState(prospect.email_directo || '');
-  const [phoneInput, setPhoneInput] = useState(prospect.telefono_directo || '');
+  const [emailInput, setEmailInput] = useState(activeLead.email_directo || activeLead.email || activeLead.email_extracted || '');
+  const [phoneInput, setPhoneInput] = useState(activeLead.telefono_directo || activeLead.telefono || '');
   const [savingContact, setSavingContact] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isResolvingEmail, setIsResolvingEmail] = useState(false);
+  const [resolveFeedback, setResolveFeedback] = useState(null);
 
   // Estado de conversión de reunión agendada
   const [isBookingMeeting, setIsBookingMeeting] = useState(false);
@@ -50,19 +60,19 @@ export default function LeadModal({ prospect, onClose, onUpdated }) {
 
   // Cargar detalle profundo (historial, mensajes, correos)
   useEffect(() => {
-    if (!prospect?.id) return;
-    setLeadData(prospect);
-    setEmailInput(prospect.email_directo || '');
-    setPhoneInput(prospect.telefono_directo || '');
+    if (!activeLead?.id) return;
+    setLeadData(activeLead);
+    setEmailInput(activeLead.email_directo || activeLead.email || activeLead.email_extracted || '');
+    setPhoneInput(activeLead.telefono_directo || activeLead.telefono || '');
 
     let isMounted = true;
     setLoadingDetail(true);
-    fetchLeadDetail(prospect.id)
+    fetchLeadDetail(activeLead.id)
       .then((detail) => {
         if (isMounted && detail) {
           setLeadData(detail);
-          if (detail.email_directo) setEmailInput(detail.email_directo);
-          if (detail.telefono_directo) setPhoneInput(detail.telefono_directo);
+          if (detail.email_directo || detail.email) setEmailInput(detail.email_directo || detail.email);
+          if (detail.telefono_directo || detail.telefono) setPhoneInput(detail.telefono_directo || detail.telefono);
         }
       })
       .catch((err) => console.error('Error cargando detalle de lead:', err))
@@ -71,9 +81,9 @@ export default function LeadModal({ prospect, onClose, onUpdated }) {
       });
 
     return () => { isMounted = false; };
-  }, [prospect?.id]);
+  }, [activeLead?.id]);
 
-  if (!prospect) return null;
+  if (!activeLead || !activeLead.id) return null;
 
   async function handleSyncLinkedIn() {
     if (!leadData?.id) return;
@@ -94,7 +104,7 @@ export default function LeadModal({ prospect, onClose, onUpdated }) {
           ubicacion: updated.ubicacion || prev.ubicacion,
         }));
         setSyncMessage({ type: 'success', text: res.mensaje || 'Perfil sincronizado en vivo exitosamente desde LinkedIn.' });
-        if (onUpdated) onUpdated(updated);
+        if (notifyUpdated) notifyUpdated(updated);
       }
     } catch (err) {
       setSyncMessage({ type: 'error', text: err.message || 'Error sincronizando con LinkedIn' });
@@ -113,7 +123,7 @@ export default function LeadModal({ prospect, onClose, onUpdated }) {
       });
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 2000);
-      if (onUpdated) onUpdated({
+      if (notifyUpdated) notifyUpdated({
         ...leadData,
         email: emailInput,
         email_directo: emailInput,
@@ -127,6 +137,52 @@ export default function LeadModal({ prospect, onClose, onUpdated }) {
     }
   }
 
+  async function handleResolveEmail() {
+    if (!leadData?.id) return;
+    try {
+      setIsResolvingEmail(true);
+      setResolveFeedback(null);
+      const res = await resolveLeadEmail(leadData.id, true);
+      if (res && res.email) {
+        setEmailInput(res.email);
+        setLeadData((prev) => ({
+          ...prev,
+          email: res.email,
+          email_directo: res.email,
+          email_extracted: res.email,
+          email_source: res.source,
+          email_status: res.status,
+          empresa_dominio: res.dominio || prev.empresa_dominio,
+        }));
+        setResolveFeedback({
+          type: 'success',
+          text: `Correo resuelto (${res.source || 'cascada'}): ${res.email} [${res.status || 'OK'}]`
+        });
+        if (notifyUpdated) notifyUpdated({
+          ...leadData,
+          email: res.email,
+          email_directo: res.email,
+          email_extracted: res.email,
+          email_source: res.source,
+          email_status: res.status
+        });
+      } else {
+        setResolveFeedback({
+          type: 'warning',
+          text: res?.motivo || 'No se localizó un correo público ni corporativo verificado.'
+        });
+      }
+    } catch (err) {
+      setResolveFeedback({
+        type: 'error',
+        text: err.message || 'Error en proceso de resolución de correo'
+      });
+    } finally {
+      setIsResolvingEmail(false);
+      setTimeout(() => setResolveFeedback(null), 6000);
+    }
+  }
+
   async function handleDeleteLead() {
     if (!leadData?.id) return;
     const confirmDelete = window.confirm(
@@ -137,7 +193,7 @@ export default function LeadModal({ prospect, onClose, onUpdated }) {
     try {
       setIsDeleting(true);
       await deleteProspect(leadData.id);
-      if (onUpdated) onUpdated({ id: leadData.id, _deleted: true });
+      if (notifyUpdated) notifyUpdated({ id: leadData.id, _deleted: true });
       onClose();
     } catch (err) {
       alert(`Error eliminando prospecto: ${err.message}`);
@@ -163,7 +219,7 @@ export default function LeadModal({ prospect, onClose, onUpdated }) {
         };
         setLeadData(meetingLead);
         setIsBookingMeeting(false);
-        if (onUpdated) onUpdated(meetingLead);
+        if (notifyUpdated) notifyUpdated(meetingLead);
       }
     } catch (err) {
       alert(`Error registrando reunión: ${err.message}`);
@@ -398,11 +454,80 @@ export default function LeadModal({ prospect, onClose, onUpdated }) {
                 </div>
               </div>
 
-              {/* Formulario de Contacto Directo */}
-              <div className="p-3.5 rounded-xl bg-zinc-950/80 border border-zinc-800 space-y-2.5">
-                <span className="text-[11px] font-semibold text-zinc-300 block uppercase tracking-wider">
-                  Datos de Contacto Directo
-                </span>
+              {/* Formulario de Contacto Directo y Resolución en Cascada */}
+              <div className="p-3.5 rounded-xl bg-zinc-950/80 border border-zinc-800 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] font-semibold text-zinc-300 block uppercase tracking-wider">
+                      Datos de Contacto
+                    </span>
+                    {leadData.email_status && (
+                      <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded border ${
+                        leadData.email_status === 'VERIFICADO'
+                          ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/40'
+                          : leadData.email_status === 'PROBABLE'
+                          ? 'bg-amber-950/80 text-amber-300 border-amber-500/40'
+                          : 'bg-zinc-900 text-zinc-400 border-zinc-700'
+                      }`}>
+                        {leadData.email_status}
+                      </span>
+                    )}
+                  </div>
+                  
+                  {/* Botón Resolver Correo */}
+                  <button
+                    type="button"
+                    onClick={handleResolveEmail}
+                    disabled={isResolvingEmail}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white text-[11px] font-medium shadow-xs transition cursor-pointer disabled:opacity-50 shrink-0"
+                    title="Resolver email: 1er grado directo desde LinkedIn o cascada (dominio + APIs + patrones corporativos + DNS MX + SMTP)"
+                  >
+                    <Sparkles className={`w-3 h-3 ${isResolvingEmail ? 'animate-spin' : ''}`} />
+                    <span>{isResolvingEmail ? 'Resolviendo...' : 'Resolver Email'}</span>
+                  </button>
+                </div>
+
+                {/* Badges de origen y dominio si existen */}
+                {(leadData.email_source || leadData.empresa_dominio) && (
+                  <div className="flex items-center gap-2 text-[10px] font-mono text-zinc-400 flex-wrap">
+                    {leadData.email_source && (
+                      <span className="px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-300">
+                        Fuente: {
+                          leadData.email_source === 'linkedin_direct' ? 'LinkedIn Directo (1º)' :
+                          leadData.email_source === 'smtp_verified' ? 'SMTP Ping 250 OK' :
+                          leadData.email_source === 'hunter' ? 'Hunter.io API' :
+                          leadData.email_source === 'dropcontact' ? 'Dropcontact' :
+                          leadData.email_source === 'pattern_catch_all' ? 'Patrón Catch-All' :
+                          'Patrón Corporativo MX'
+                        }
+                      </span>
+                    )}
+                    {leadData.empresa_dominio && (
+                      <span className="px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-sky-400">
+                        Dominio: {leadData.empresa_dominio}
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* Notificación de feedback de resolución */}
+                {resolveFeedback && (
+                  <div className={`p-2.5 rounded-lg text-xs flex items-center gap-2 border transition-all ${
+                    resolveFeedback.type === 'success'
+                      ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300'
+                      : resolveFeedback.type === 'warning'
+                      ? 'bg-amber-950/40 border-amber-500/40 text-amber-300'
+                      : 'bg-rose-950/40 border-rose-500/40 text-rose-300'
+                  }`}>
+                    {resolveFeedback.type === 'success' ? (
+                      <Check className="w-3.5 h-3.5 shrink-0" />
+                    ) : (
+                      <X className="w-3.5 h-3.5 shrink-0" />
+                    )}
+                    <span className="text-[11px] leading-tight">{resolveFeedback.text}</span>
+                  </div>
+                )}
+
                 <div className="space-y-2">
                   <div className="flex items-center gap-2 bg-zinc-900 px-2.5 py-1.5 rounded-lg border border-zinc-800 focus-within:border-sky-500">
                     <Mail className="w-3.5 h-3.5 text-zinc-400" />
@@ -439,6 +564,104 @@ export default function LeadModal({ prospect, onClose, onUpdated }) {
                     )}
                   </button>
                 </div>
+              </div>
+
+              {/* Tarjeta de Inteligencia B2B: Cruce con Zoho CRM */}
+              <div className="p-3.5 rounded-xl bg-zinc-950/80 border border-zinc-800 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <div className="w-6 h-6 rounded bg-amber-500/10 text-amber-400 flex items-center justify-center border border-amber-500/20">
+                      <Database className="w-3.5 h-3.5" />
+                    </div>
+                    <div>
+                      <span className="text-[11px] font-semibold text-zinc-200 block uppercase tracking-wider">
+                        Inteligencia Zoho CRM
+                      </span>
+                      <p className="text-[10px] text-zinc-400">
+                        {leadData.zoho_synced_at ? `Sincronizado: ${new Date(leadData.zoho_synced_at).toLocaleDateString()}` : 'Sin cruce reciente'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {leadData.zoho_id ? (
+                  <div className="space-y-2.5 pt-1 border-t border-zinc-800/80">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-1.5">
+                        <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-zinc-900 border border-zinc-700 text-zinc-200">
+                          {leadData.zoho_entidad_tipo || 'Entidad'}
+                        </span>
+                        {leadData.zoho_cuenta_es_cliente === 1 && (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 flex items-center gap-1">
+                            <ShieldCheck className="w-3 h-3" />
+                            CLIENTE ACTIVO
+                          </span>
+                        )}
+                        {leadData.zoho_lead_status && (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-zinc-900 border border-zinc-800 text-zinc-400">
+                            Estado: {leadData.zoho_lead_status}
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-[10px] font-mono text-zinc-500">
+                        ID: {leadData.zoho_id}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-[11px]">
+                      <div className="p-2 rounded bg-zinc-900/60 border border-zinc-800/60">
+                        <span className="text-[10px] text-zinc-400 block mb-0.5">Email en Zoho</span>
+                        <span className="font-mono text-zinc-200 break-all">
+                          {leadData.email_zoho || 'Sin correo registrado'}
+                        </span>
+                      </div>
+                      <div className="p-2 rounded bg-zinc-900/60 border border-zinc-800/60">
+                        <span className="text-[10px] text-zinc-400 block mb-0.5">Dueño de la Cuenta</span>
+                        <span className="font-medium text-zinc-200">
+                          {leadData.zoho_cuenta_dueno || 'Sin asignar'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {leadData.zoho_cuenta_nombre && (
+                      <div className="p-2 rounded bg-zinc-900/40 border border-zinc-800/50 flex items-center justify-between text-[11px]">
+                        <span className="text-zinc-400">Cuenta / Colegio:</span>
+                        <span className="font-medium text-zinc-200">{leadData.zoho_cuenta_nombre}</span>
+                      </div>
+                    )}
+
+                    {/* Tratos / Oportunidades asociadas */}
+                    {leadData.zoho_tratos && leadData.zoho_tratos.length > 0 && (
+                      <div className="space-y-1.5 pt-1">
+                        <span className="text-[10px] uppercase font-semibold text-zinc-400 tracking-wider block">
+                          Tratos Asociados ({leadData.zoho_tratos.length})
+                        </span>
+                        <div className="space-y-1 max-h-36 overflow-y-auto">
+                          {leadData.zoho_tratos.map((trato, tIdx) => (
+                            <div key={tIdx} className="p-2 rounded bg-zinc-900/90 border border-zinc-800 text-[11px] flex items-center justify-between">
+                              <div className="min-w-0 pr-2">
+                                <span className="font-medium text-zinc-200 block truncate">{trato.deal_name || 'Oportunidad'}</span>
+                                <span className="text-[10px] text-zinc-400 block">Etapa: {trato.stage || 'En curso'}</span>
+                              </div>
+                              <div className="text-right shrink-0">
+                                {trato.amount && (
+                                  <span className="font-mono text-emerald-400 font-medium block">
+                                    ${Number(trato.amount).toLocaleString()}
+                                  </span>
+                                )}
+                                <span className="text-[9px] text-zinc-500 block">{trato.owner_name}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-zinc-400 pt-1 border-t border-zinc-800/80">
+                    Aún no se ha realizado el cruce con Zoho CRM. Haz clic en "Cruzar con Zoho" para verificar si es Contacto o Lead, extraer su email y alertar si la cuenta ya es cliente activo.
+                  </p>
+                )}
               </div>
 
               {/* Ubicación y Grado */}

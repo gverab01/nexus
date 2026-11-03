@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
+import TopBar from './components/TopBar';
 import SafetyBanner from './components/SafetyBanner';
 import ProspectsView from './components/Prospects/ProspectsView';
 import ListsView from './components/Lists/ListsView';
@@ -11,6 +12,10 @@ import CreateAccountView from './components/Admin/CreateAccountView';
 import AgencyPortalView from './components/Agency/AgencyPortalView';
 import LoginView from './components/Auth/LoginView';
 import SubscriptionModal from './components/Auth/SubscriptionModal';
+import LeadsDirectoryView from './components/Prospects/LeadsDirectoryView';
+import AntibanSettingsModal from './components/AntibanSettingsModal';
+import AntibanSettingsView from './components/Antiban/AntibanSettingsView';
+import DashboardView from './components/Dashboard/DashboardView';
 import { 
   fetchLeadLists, 
   fetchSequences, 
@@ -18,10 +23,14 @@ import {
   fetchBrowserStatus, 
   fetchSafetyStatus, 
   toggleCampaign, 
+  updateSafetyConfig,
   showWorkBrowser,
   checkUserSession,
   logoutUser,
-  fetchAgencyFinances
+  fetchAgencyFinances,
+  fetchProspects,
+  loginZoho,
+  logoutZoho
 } from './services/api';
 
 function getDefaultTabForUser(user) {
@@ -34,19 +43,38 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [isSubscriptionModalOpen, setIsSubscriptionModalOpen] = useState(false);
+  const [isAntibanModalOpen, setIsAntibanModalOpen] = useState(false);
+  const [antibanConfig, setAntibanConfig] = useState({
+    horario_laboral_activo: true,
+    pausas_antiban_activas: true,
+    limites_diarios_activos: true,
+    limite_linkedin_diario: 5,
+    limite_email_workspace_diario: 15,
+  });
 
   const [activeTab, setActiveTab] = useState('prospectos');
+  const [totalLeadsCount, setTotalLeadsCount] = useState(0);
   const [listsCount, setListsCount] = useState(0);
   const [sequencesCount, setSequencesCount] = useState(0);
   const [logsCount, setLogsCount] = useState(0);
   const [isExtracting, setIsExtracting] = useState(false);
   const [linkedinSessionActive, setLinkedinSessionActive] = useState(false);
+  const [whatsappSessionActive, setWhatsappSessionActive] = useState(false);
+  const [zohoSessionActive, setZohoSessionActive] = useState(false);
   const [campaignActive, setCampaignActive] = useState(true);
 
   // Workspace seleccionado para Operar (vacío = sede propia de la organización)
   const [selectedWorkspaceTenantId, setSelectedWorkspaceTenantId] = useState('');
   const [selectedWorkspaceName, setSelectedWorkspaceName] = useState('');
   const [agencyClients, setAgencyClients] = useState([]);
+  const [selectedSequenceId, setSelectedSequenceId] = useState(null);
+
+  function handleTabChange(nextTab) {
+    if (nextTab === 'secuencias') {
+      setSelectedSequenceId(null);
+    }
+    setActiveTab(nextTab);
+  }
 
   // Verificación inicial de sesión al arrancar la app
   useEffect(() => {
@@ -138,40 +166,117 @@ export default function App() {
         fetchSafetyStatus().catch(() => ({})),
       ]);
       setLinkedinSessionActive(Boolean(browser.sesion_linkedin_activa));
+      setWhatsappSessionActive(Boolean(browser.sesion_whatsapp_activa));
+      setZohoSessionActive(Boolean(browser.sesion_zoho_activa));
       const isStopped = Boolean(safety.kill_switch?.activado || safety.kill_switch === true);
       setCampaignActive(!isStopped);
+
+      if (safety?.configuracion) {
+        setAntibanConfig({
+          horario_laboral_activo: safety.configuracion.horario_laboral_activo !== '0',
+          pausas_antiban_activas: safety.configuracion.pausas_antiban_activas !== '0',
+          limites_diarios_activos: safety.configuracion.limites_diarios_activos !== '0',
+          limite_linkedin_diario: parseInt(safety.configuracion.limite_linkedin_diario || '5', 10),
+          limite_email_workspace_diario: parseInt(safety.configuracion.limite_email_workspace_diario || '15', 10),
+        });
+      }
     } catch {}
+  }
+
+  async function handleToggleAntiban(key) {
+    try {
+      const currentVal = Boolean(antibanConfig[key]);
+      const nextVal = !currentVal;
+      setAntibanConfig((prev) => ({ ...prev, [key]: nextVal }));
+      await updateSafetyConfig(key, nextVal ? '1' : '0');
+      setTimeout(checkConnectionAndCampaign, 500);
+    } catch (err) {
+      console.error('Error toggling antiban setting:', err);
+      checkConnectionAndCampaign();
+    }
   }
 
   async function refreshCounters() {
     try {
-      const [lists, seqs, logStats] = await Promise.all([
+      const [lists, seqs, logStats, leadsData] = await Promise.all([
         fetchLeadLists(selectedWorkspaceTenantId).catch(() => []),
         fetchSequences(selectedWorkspaceTenantId).catch(() => []),
         fetchLogStats().catch(() => ({})),
+        fetchProspects({ limit: 1, tenantId: selectedWorkspaceTenantId }).catch(() => ({ total: 0 })),
       ]);
 
       setListsCount(lists.length);
       setSequencesCount(seqs.length);
       setLogsCount(logStats.total_logs || 0);
+      setTotalLeadsCount(leadsData?.total || 0);
       setIsExtracting(Boolean(logStats.is_extracting_now));
     } catch (err) {
       console.error('Error actualizando contadores:', err);
     }
   }
 
-  async function handleLoginLinkedin() {
+  async function handleOpenLinkedin() {
     try {
-      await showWorkBrowser('https://www.linkedin.com/login');
+      const url = linkedinSessionActive ? 'https://www.linkedin.com/feed/' : 'https://www.linkedin.com/login';
+      await showWorkBrowser(url, 'linkedin');
+      setTimeout(checkConnectionAndCampaign, 1500);
+    } catch (err) {
+      alert(`Error abriendo LinkedIn: ${err.message}`);
+    }
+  }
+
+  async function handleOpenWhatsApp() {
+    try {
+      await showWorkBrowser('https://web.whatsapp.com', 'whatsapp');
+      setTimeout(checkConnectionAndCampaign, 1500);
+    } catch (err) {
+      alert(`Error abriendo WhatsApp Web: ${err.message}`);
+    }
+  }
+
+  async function handleLoginLinkedin() {
+    return handleOpenLinkedin();
+  }
+
+  async function handleLoginWhatsApp() {
+    return handleOpenWhatsApp();
+  }
+
+  async function handleOpenZoho() {
+    try {
+      if (zohoSessionActive) {
+        await showWorkBrowser('https://crm.zoho.com/crm/org902879914/tab/Home', 'zoho');
+      } else {
+        await loginZoho();
+      }
+      setTimeout(checkConnectionAndCampaign, 1500);
+    } catch (err) {
+      alert(`Error abriendo Zoho CRM: ${err.message}`);
+    }
+  }
+
+  async function handleLoginZoho() {
+    try {
+      await loginZoho();
+      setTimeout(checkConnectionAndCampaign, 1500);
+    } catch (err) {
+      alert(`Error conectando con Zoho Accounts: ${err.message}`);
+    }
+  }
+
+  async function handleLogoutZoho() {
+    try {
+      setZohoSessionActive(false);
+      await logoutZoho();
       setTimeout(checkConnectionAndCampaign, 2000);
     } catch (err) {
-      alert(`Error abriendo login de LinkedIn: ${err.message}`);
+      alert(`Error cerrando sesión en Zoho: ${err.message}`);
     }
   }
 
   async function handleViewBrowser() {
     try {
-      await showWorkBrowser();
+      await showWorkBrowser(null, 'linkedin');
       setTimeout(checkConnectionAndCampaign, 1500);
     } catch (err) {
       alert(`Error con el navegador de trabajo: ${err.message}`);
@@ -233,16 +338,28 @@ export default function App() {
       {/* 1. Menú lateral izquierdo (Sidebar) */}
       <Sidebar
         activeTab={activeTab}
-        setActiveTab={setActiveTab}
+        setActiveTab={handleTabChange}
+        totalLeadsCount={totalLeadsCount}
         listsCount={listsCount}
         sequencesCount={sequencesCount}
         logsCount={logsCount}
         isExtracting={isExtracting}
         linkedinSessionActive={linkedinSessionActive}
+        whatsappSessionActive={whatsappSessionActive}
+        zohoSessionActive={zohoSessionActive}
         campaignActive={campaignActive}
         onToggleCampaign={handleToggleCampaign}
         onLoginLinkedin={handleLoginLinkedin}
+        onLoginWhatsApp={handleLoginWhatsApp}
+        onLoginZoho={handleLoginZoho}
+        onOpenLinkedin={handleOpenLinkedin}
+        onOpenWhatsApp={handleOpenWhatsApp}
+        onOpenZoho={handleOpenZoho}
+        onLogoutZoho={handleLogoutZoho}
         onViewBrowser={handleViewBrowser}
+        antibanConfig={antibanConfig}
+        onToggleAntiban={handleToggleAntiban}
+        onOpenAntibanSettings={() => setIsAntibanModalOpen(true)}
         currentUser={currentUser}
         agencyClients={agencyClients}
         selectedWorkspaceTenantId={selectedWorkspaceTenantId}
@@ -254,32 +371,45 @@ export default function App() {
       />
 
       {/* 2. Área principal de contenido (derecha) */}
-      <div className="flex-1 flex flex-col min-w-0 h-screen overflow-y-auto">
-        <main className="flex-1 p-6 space-y-6 max-w-7xl w-full mx-auto">
-          {/* Banner de seguridad y límites de prospección (oculto en Consola Master, Clientes y Crear Cuenta) */}
+      <div className="flex-1 flex flex-col min-w-0 h-screen overflow-hidden bg-[#0E0F12]">
+        <TopBar
+          activeTab={activeTab}
+          campaignActive={campaignActive}
+          onToggleCampaign={handleToggleCampaign}
+          onViewBrowser={handleViewBrowser}
+          currentUser={currentUser}
+          agencyClients={agencyClients}
+          selectedWorkspaceTenantId={selectedWorkspaceTenantId}
+          selectedWorkspaceName={selectedWorkspaceName}
+          onSelectWorkspace={handleSelectWorkspace}
+          onExitWorkspace={handleExitWorkspace}
+        />
+        <div className="flex-1 overflow-y-auto min-w-0">
+          <main className="p-6 space-y-6 max-w-7xl w-full mx-auto">
+            {/* Banner de seguridad contextual (solo activo ante amenazas reales de antiban o checkpoints) */}
           {!['super_admin', 'admin_clientes', 'admin_crear_cuenta'].includes(activeTab) && (
-            <SafetyBanner quotaToday={0} quotaMax={5} />
+            <SafetyBanner activeTab={activeTab} />
           )}
 
           {/* Vistas modulares */}
           {activeTab === 'super_admin' && (
             <SuperAdminView 
               onEnterWorkspace={handleSelectWorkspace} 
-              onNavigateToClients={() => setActiveTab('admin_clientes')}
+              onNavigateToClients={() => handleTabChange('admin_clientes')}
             />
           )}
 
           {activeTab === 'admin_clientes' && (
             <AdminClientsView 
               onEnterWorkspace={handleSelectWorkspace} 
-              onNavigateToCreateAccount={() => setActiveTab('admin_crear_cuenta')}
+              onNavigateToCreateAccount={() => handleTabChange('admin_crear_cuenta')}
             />
           )}
 
           {activeTab === 'admin_crear_cuenta' && (
             <CreateAccountView 
               onEnterWorkspace={handleSelectWorkspace} 
-              onNavigateToClients={() => setActiveTab('admin_clientes')}
+              onNavigateToClients={() => handleTabChange('admin_clientes')}
             />
           )}
 
@@ -297,9 +427,20 @@ export default function App() {
             />
           )}
 
+          {activeTab === 'leads_directorio' && (
+            <LeadsDirectoryView 
+              activeTenantWorkspace={selectedWorkspaceTenantId}
+              onOpenLeadSearch={() => handleTabChange('prospectos')}
+            />
+          )}
+
           {activeTab === 'listas' && (
             <ListsView 
-              onSelectSequence={() => setActiveTab('secuencias')} 
+              onSelectSequence={(seq) => {
+                setSelectedSequenceId(seq?.id || null);
+                setActiveTab('secuencias');
+              }} 
+              onNavigateToSearch={(searchTerm) => handleTabChange('prospectos')}
               activeTenantWorkspace={selectedWorkspaceTenantId}
             />
           )}
@@ -307,13 +448,31 @@ export default function App() {
           {activeTab === 'secuencias' && (
             <SequencesView 
               activeTenantWorkspace={selectedWorkspaceTenantId}
+              initialSequenceId={selectedSequenceId}
+              onBackToGlobal={() => setSelectedSequenceId(null)}
+              onSequencesUpdated={refreshCounters}
             />
+          )}
+
+          {activeTab === 'dashboard' && (
+            <DashboardView 
+              activeTenantWorkspace={selectedWorkspaceTenantId}
+              onNavigateToTab={(tab, seqId) => {
+                if (seqId) setSelectedSequenceId(seqId);
+                setActiveTab(tab);
+              }}
+            />
+          )}
+
+          {activeTab === 'antiban' && (
+            <AntibanSettingsView />
           )}
 
           {activeTab === 'logs' && (
             <ActivityLogsView onStatusChange={handleLogStatusChange} />
           )}
         </main>
+        </div>
       </div>
 
       {/* Modal de detalles de suscripción y usuario */}
@@ -323,6 +482,13 @@ export default function App() {
         currentUser={currentUser}
         onLogout={handleLogout}
         onUserUpdated={(updated) => setCurrentUser(updated)}
+      />
+
+      {/* Modal de Ajustes Avanzados Antiban */}
+      <AntibanSettingsModal
+        isOpen={isAntibanModalOpen}
+        onClose={() => setIsAntibanModalOpen(false)}
+        onSaved={checkConnectionAndCampaign}
       />
     </div>
   );

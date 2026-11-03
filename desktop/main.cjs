@@ -1,41 +1,259 @@
 const { app, BrowserWindow, session, ipcMain } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const http = require('http');
 const workerRunner = require('./worker_runner.cjs');
 
+const { isUrlAllowed, isSubresourceAllowed, isSilentlyBlocked } = require('./security/domain_guard.cjs');
+const { handleLinkedInExtractNetwork, handleLinkedInEnrichProfile } = require('./security/action_handlers.cjs');
+
 let mainWindow = null;
-let workWindow = null;
+let linkedInWindow = null;
+let whatsAppWindow = null;
+let zohoWindow = null;
+let zohoConsoleLogs = [];
+let cachedWhatsAppSession = false;
 const INTERNAL_PORT = 9099;
 
-// Partición persistente para aislar las sesiones (LinkedIn, Gmail, etc.)
-const WORK_PARTITION_NAME = 'persist:dripify_work_session';
+// Desactivar flags de automatización en Chromium y silenciar logs internos de depuración de Chromium (Hit debug scenario: 4 y handshake net_error -101)
+app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
+app.commandLine.appendSwitch('excludeSwitches', 'enable-automation');
+app.commandLine.appendSwitch('log-level', '3'); // Silencia advertencias internas no críticas de Chromium
+app.commandLine.appendSwitch('ignore-certificate-errors'); // Evita errores SSL net_error -101 en sockets/telemetría interna
+
+const STEALTH_INJECTION_SCRIPT = `
+  (() => {
+    try {
+      // 1. Eliminar rastro de automatización
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined, configurable: true });
+      
+      // 2. Emular objeto window.chrome auténtico
+      if (!window.chrome) {
+        window.chrome = {};
+      }
+      window.chrome.runtime = window.chrome.runtime || {
+        OnInstalledReason: { CHROME_UPDATE: 'chrome_update', INSTALL: 'install', SHARED_MODULE_UPDATE: 'shared_module_update', UPDATE: 'update' },
+        PlatformArch: { ARM: 'arm', ARM64: 'arm64', MIPS: 'mips', MIPS64: 'mips64', X86_32: 'x86-32', X86_64: 'x86-64' },
+        PlatformNaclArch: { ARM: 'arm', MIPS: 'mips', MIPS64: 'mips64', X86_32: 'x86-32', X86_64: 'x86-64' },
+        PlatformOs: { ANDROID: 'android', CROS: 'cros', LINUX: 'linux', MAC: 'mac', OPENBSD: 'openbsd', WIN: 'win' }
+      };
+      window.chrome.loadTimes = window.chrome.loadTimes || function() { return {}; };
+      window.chrome.csi = window.chrome.csi || function() { return {}; };
+      window.chrome.app = window.chrome.app || { isInstalled: false };
+
+      // 3. Emular idiomas consistentes con el locale del usuario
+      Object.defineProperty(navigator, 'languages', {
+        get: () => ['es-CL', 'es', 'en-US', 'en'],
+        configurable: true
+      });
+
+      // 4. Emular Plugins estándar de Chromium/Chrome
+      if (!navigator.plugins || navigator.plugins.length === 0) {
+        const dummyPlugins = [
+          { name: 'PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+          { name: 'Chrome PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+          { name: 'Chromium PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' }
+        ];
+        Object.defineProperty(navigator, 'plugins', {
+          get: () => dummyPlugins,
+          configurable: true
+        });
+      }
+
+      // 5. Normalizar consulta de permisos
+      if (navigator.permissions && navigator.permissions.query) {
+        const origQuery = navigator.permissions.query.bind(navigator.permissions);
+        navigator.permissions.query = (parameters) => {
+          if (parameters && parameters.name === 'notifications') {
+            return Promise.resolve({ state: Notification.permission });
+          }
+          return origQuery(parameters);
+        };
+      }
+    } catch (e) {}
+  })()
+`;
+
+// Particiones persistentes e independientes por servicio (Workstream 5.1 - C-03)
+const LI_PARTITION_NAME = 'persist:nexusreach_li_session';
+const WA_PARTITION_NAME = 'persist:nexusreach_wa_session';
+const ZOHO_PARTITION_NAME = 'persist:nexusreach_zoho_bridge';
 
 /**
- * Crea o retorna la ventana de trabajo en Chromium con sesión aislada.
+ * Migra de forma transparente los datos de sesión existentes (cookies, IndexedDB, etc.)
+ * desde la partición histórica compartida hacia las particiones independientes por servicio.
  */
-function getOrCreateWorkWindow(shouldShow = false) {
-  if (workWindow && !workWindow.isDestroyed()) {
-    if (shouldShow && !workWindow.isVisible()) {
-      workWindow.show();
-      workWindow.focus();
+function migrateLegacyPartitions() {
+  try {
+    const partitionsDir = path.join(app.getPath('userData'), 'Partitions');
+    if (!fs.existsSync(partitionsDir)) {
+      fs.mkdirSync(partitionsDir, { recursive: true });
     }
-    return workWindow;
+
+    const legacyDirs = ['nexusreach_work_session', 'dripify_work_session'];
+    let sourceLegacy = null;
+    for (const legacy of legacyDirs) {
+      const fullPath = path.join(partitionsDir, legacy);
+      if (fs.existsSync(fullPath)) {
+        sourceLegacy = fullPath;
+        break;
+      }
+    }
+
+    if (!sourceLegacy) return;
+
+    const targets = ['nexusreach_li_session', 'nexusreach_wa_session', 'nexusreach_zoho_bridge'];
+    for (const target of targets) {
+      const targetPath = path.join(partitionsDir, target);
+      if (!fs.existsSync(targetPath)) {
+        console.log(`[Electron Sesion] Migrando partición persistente de ${path.basename(sourceLegacy)} a ${target}...`);
+        try {
+          fs.cpSync(sourceLegacy, targetPath, { recursive: true });
+          console.log(`[Electron Sesion] Migración a ${target} completada exitosamente.`);
+        } catch (copyErr) {
+          console.warn(`[Electron Sesion] Error migrando partición a ${target}:`, copyErr.message);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[Electron Sesion] Excepción durante la migración de particiones:', err.message);
+  }
+}
+
+async function checkWhatsAppWebSession(win) {
+  if (!win || win.isDestroyed()) return false;
+  try {
+    const url = win.webContents.getURL();
+    if (url.includes('web.whatsapp.com')) {
+      const isAuth = await win.webContents.executeJavaScript(`
+        Boolean(
+          window.localStorage.getItem('last-wid') ||
+          window.localStorage.getItem('WABrowserId') ||
+          document.querySelector('#pane-side') ||
+          document.querySelector('[data-testid="chat-list"]') ||
+          (document.querySelector('#app') && !document.querySelector('canvas[aria-label]'))
+        )
+      `);
+      if (isAuth) {
+        cachedWhatsAppSession = true;
+      }
+      return isAuth;
+    }
+  } catch (err) {}
+  return false;
+}
+
+/**
+ * Configura los controles de Allowlist (DomainGuard) y listeners de sesión para cada partición aislada.
+ */
+function setupSessionGuardsAndListeners() {
+  migrateLegacyPartitions();
+
+  const cleanUserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
+
+  // 1. Partición LinkedIn
+  const liSession = session.fromPartition(LI_PARTITION_NAME);
+  liSession.setUserAgent(cleanUserAgent);
+  liSession.webRequest.onBeforeRequest((details, callback) => {
+    const u = details.url;
+    if (u.startsWith('data:') || u.startsWith('blob:') || u.startsWith('devtools:') || u === 'about:blank') {
+      return callback({ cancel: false });
+    }
+    // Sondeos de extensiones y píxeles publicitarios: se bloquean en silencio para no ensuciar la consola
+    if (isSilentlyBlocked(u)) {
+      return callback({ cancel: true });
+    }
+    const check = isSubresourceAllowed(u, false);
+    if (!check.allowed || check.channel !== 'linkedin') {
+      console.warn(`[DomainGuard LI] Petición bloqueada a dominio no autorizado: ${u}`);
+      return callback({ cancel: true });
+    }
+    callback({ cancel: false });
+  });
+  liSession.cookies.on('changed', (event, cookie, cause, removed) => {
+    if (cookie.name === 'li_at' && !removed) {
+      console.log('[Electron Sesion] ¡Cookie de autenticación li_at guardada! Sesión de LinkedIn activa.');
+    }
+  });
+
+  // 2. Partición WhatsApp
+  const waSession = session.fromPartition(WA_PARTITION_NAME);
+  waSession.setUserAgent(cleanUserAgent);
+  waSession.webRequest.onBeforeRequest((details, callback) => {
+    const u = details.url;
+    if (u.startsWith('data:') || u.startsWith('blob:') || u.startsWith('devtools:') || u === 'about:blank') {
+      return callback({ cancel: false });
+    }
+    if (isSilentlyBlocked(u)) {
+      return callback({ cancel: true });
+    }
+    const check = isSubresourceAllowed(u, false);
+    if (!check.allowed || check.channel !== 'whatsapp') {
+      console.warn(`[DomainGuard WA] Petición bloqueada a dominio no autorizado: ${u}`);
+      return callback({ cancel: true });
+    }
+    callback({ cancel: false });
+  });
+  waSession.cookies.on('changed', (event, cookie, cause, removed) => {
+    if (cookie.domain && cookie.domain.includes('whatsapp.com') && !removed) {
+      cachedWhatsAppSession = true;
+    }
+  });
+
+  // 3. Partición Zoho Bridge (aislada y transitoria)
+  const zohoSession = session.fromPartition(ZOHO_PARTITION_NAME);
+  zohoSession.setUserAgent(cleanUserAgent);
+  zohoSession.webRequest.onBeforeRequest((details, callback) => {
+    const u = details.url;
+    if (u.includes('MetaCachingSW') || isSilentlyBlocked(u)) {
+      return callback({ cancel: true });
+    }
+    if (u.startsWith('data:') || u.startsWith('blob:') || u.startsWith('devtools:') || u === 'about:blank') {
+      return callback({ cancel: false });
+    }
+    const check = isSubresourceAllowed(u, true);
+    if (!check.allowed || check.channel !== 'zoho') {
+      console.warn(`[DomainGuard Zoho] Petición bloqueada a dominio no autorizado: ${u}`);
+      return callback({ cancel: true });
+    }
+    callback({ cancel: false });
+  });
+  zohoSession.clearStorageData({ storages: ['serviceworkers', 'cachestorage'] }).catch(() => {});
+  zohoSession.cookies.on('changed', (event, cookie, cause, removed) => {
+    if (cookie.domain && cookie.domain.includes('zoho.com') && !removed) {
+      if (cookie.name === 'CSRF_TOKEN' || cookie.name === 'crmcsr') {
+        console.log('[Electron Sesion] ¡Cookie de Zoho CRM detectada! Sesión activa.');
+      }
+    }
+  });
+}
+
+/**
+ * Crea o retorna la ventana de LinkedIn en Chromium con sesión aislada.
+ */
+function getOrCreateLinkedInWindow(shouldShow = false) {
+  if (linkedInWindow && !linkedInWindow.isDestroyed()) {
+    if (shouldShow && !linkedInWindow.isVisible()) {
+      linkedInWindow.show();
+      linkedInWindow.focus();
+    } else if (shouldShow) {
+      linkedInWindow.focus();
+    }
+    return linkedInWindow;
   }
 
-  const workSession = session.fromPartition(WORK_PARTITION_NAME);
-
-  // Configuración de User-Agent limpio de Chromium estándar
+  const liSession = session.fromPartition(LI_PARTITION_NAME);
   const cleanUserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
-  workSession.setUserAgent(cleanUserAgent);
+  liSession.setUserAgent(cleanUserAgent);
 
-  workWindow = new BrowserWindow({
+  linkedInWindow = new BrowserWindow({
     width: 1200,
     height: 850,
-    title: 'NexusReach Pro - Navegador de Trabajo',
+    title: 'NexusReach Pro - LinkedIn Aislado',
     show: shouldShow,
     autoHideMenuBar: true,
     webPreferences: {
-      session: workSession,
+      session: liSession,
       contextIsolation: false,
       nodeIntegration: false,
       sandbox: false,
@@ -43,22 +261,177 @@ function getOrCreateWorkWindow(shouldShow = false) {
     }
   });
 
-  // Si el usuario cierra manualmente la ventana de trabajo, solo la ocultamos para no perder la sesión
-  workWindow.on('close', (e) => {
+  linkedInWindow.on('close', (e) => {
     if (!app.isQuitting) {
       e.preventDefault();
-      workWindow.hide();
+      linkedInWindow.hide();
     }
   });
 
-  // Monitorear cuando se inicia sesión en LinkedIn
-  workSession.cookies.on('changed', (event, cookie, cause, removed) => {
-    if (cookie.name === 'li_at' && !removed) {
-      console.log('[Electron Sesion] ¡Cookie de autenticación li_at guardada! Sesión de LinkedIn activa.');
+  linkedInWindow.webContents.on('dom-ready', () => {
+    linkedInWindow.webContents.executeJavaScript(STEALTH_INJECTION_SCRIPT).catch(() => {});
+  });
+
+  linkedInWindow.webContents.on('did-finish-load', () => {
+    linkedInWindow.webContents.executeJavaScript(STEALTH_INJECTION_SCRIPT).catch(() => {});
+  });
+
+  return linkedInWindow;
+}
+
+/**
+ * Crea o retorna la ventana de WhatsApp Web en Chromium con sesión aislada.
+ */
+function getOrCreateWhatsAppWindow(shouldShow = false) {
+  if (whatsAppWindow && !whatsAppWindow.isDestroyed()) {
+    if (shouldShow && !whatsAppWindow.isVisible()) {
+      whatsAppWindow.show();
+      whatsAppWindow.focus();
+    } else if (shouldShow) {
+      whatsAppWindow.focus();
+    }
+    return whatsAppWindow;
+  }
+
+  const waSession = session.fromPartition(WA_PARTITION_NAME);
+  const cleanUserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
+  waSession.setUserAgent(cleanUserAgent);
+
+  whatsAppWindow = new BrowserWindow({
+    width: 1100,
+    height: 850,
+    title: 'NexusReach Pro - WhatsApp Web Aislado',
+    show: shouldShow,
+    autoHideMenuBar: true,
+    webPreferences: {
+      session: waSession,
+      contextIsolation: false,
+      nodeIntegration: false,
+      sandbox: false,
+      webSecurity: true
     }
   });
 
-  return workWindow;
+  whatsAppWindow.on('close', (e) => {
+    if (!app.isQuitting) {
+      e.preventDefault();
+      whatsAppWindow.hide();
+    }
+  });
+
+  whatsAppWindow.webContents.on('dom-ready', () => {
+    whatsAppWindow.webContents.executeJavaScript(STEALTH_INJECTION_SCRIPT).catch(() => {});
+  });
+
+  whatsAppWindow.webContents.on('did-finish-load', () => {
+    whatsAppWindow.webContents.executeJavaScript(STEALTH_INJECTION_SCRIPT).catch(() => {});
+    const u = whatsAppWindow.webContents.getURL();
+    if (u.includes('web.whatsapp.com')) {
+      checkWhatsAppWebSession(whatsAppWindow).then((isAuth) => {
+        if (isAuth) console.log('[Electron Sesion] ¡Sesión de WhatsApp Web detectada y activa!');
+      });
+    }
+  });
+
+  // Si recién se crea, cargar automáticamente WhatsApp Web
+  const currentUrl = whatsAppWindow.webContents.getURL();
+  if (!currentUrl || currentUrl === 'about:blank') {
+    whatsAppWindow.loadURL('https://web.whatsapp.com').catch(() => {});
+  }
+
+  return whatsAppWindow;
+}
+
+/**
+ * Crea o retorna la ventana de Zoho CRM en Chromium con sesión aislada y persistente.
+ */
+function getOrCreateZohoWindow(shouldShow = false) {
+  if (zohoWindow && !zohoWindow.isDestroyed()) {
+    if (shouldShow && !zohoWindow.isVisible()) {
+      zohoWindow.show();
+      zohoWindow.focus();
+    } else if (shouldShow) {
+      zohoWindow.focus();
+    }
+    return zohoWindow;
+  }
+
+  const zohoSession = session.fromPartition(ZOHO_PARTITION_NAME);
+  const cleanUserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
+  zohoSession.setUserAgent(cleanUserAgent);
+
+  zohoWindow = new BrowserWindow({
+    width: 1280,
+    height: 900,
+    title: 'NexusReach Pro - Zoho CRM Aislado',
+    show: shouldShow,
+    autoHideMenuBar: true,
+    webPreferences: {
+      session: zohoSession,
+      preload: path.join(__dirname, 'zoho_preload.cjs'),
+      contextIsolation: false,
+      nodeIntegration: false,
+      sandbox: false,
+      webSecurity: true
+    }
+  });
+
+  zohoWindow.on('close', (e) => {
+    if (!app.isQuitting) {
+      e.preventDefault();
+      zohoWindow.hide();
+    }
+  });
+
+  zohoWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.key === 'F5' || (input.control && input.key.toLowerCase() === 'r')) {
+      zohoWindow.reload();
+    }
+    if (input.control && input.shift && input.key.toLowerCase() === 'i') {
+      zohoWindow.webContents.toggleDevTools();
+    }
+  });
+
+  zohoWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
+    zohoConsoleLogs.push({ level, message, line, sourceId });
+    if (zohoConsoleLogs.length > 50) zohoConsoleLogs.shift();
+  });
+
+  const currentUrl = zohoWindow.webContents.getURL();
+  if (!currentUrl || currentUrl === 'about:blank') {
+    zohoSession.cookies.get({ domain: '.zoho.com' }).then((cookies) => {
+      const hasCrmCsr = cookies.some((c) => c.name === 'crmcsr');
+      const initialUrl = hasCrmCsr
+        ? 'https://crm.zoho.com/crm/org902879914/tab/Home'
+        : 'https://accounts.zoho.com/signin?servicename=ZohoCRM';
+      if (zohoWindow && !zohoWindow.isDestroyed()) {
+        zohoWindow.loadURL(initialUrl).catch(() => {});
+      }
+    }).catch(() => {
+      if (zohoWindow && !zohoWindow.isDestroyed()) {
+        zohoWindow.loadURL('https://accounts.zoho.com/signin?servicename=ZohoCRM').catch(() => {});
+      }
+    });
+  }
+
+  return zohoWindow;
+}
+
+/**
+ * Router para obtener o crear la ventana de trabajo correspondiente según canal o URL.
+ */
+function getOrCreateWorkWindow(shouldShow = false, channel = null, url = null) {
+  const isZoho = (channel && channel.toLowerCase().includes('zoho')) || 
+                 (url && url.toLowerCase().includes('zoho'));
+  if (isZoho) {
+    return getOrCreateZohoWindow(shouldShow);
+  }
+  const isWA = (channel && channel.toLowerCase().includes('whatsapp')) || 
+               (url && url.toLowerCase().includes('whatsapp'));
+  if (isWA) {
+    return getOrCreateWhatsAppWindow(shouldShow);
+  }
+  return getOrCreateLinkedInWindow(shouldShow);
 }
 
 /**
@@ -86,8 +459,14 @@ function createMainWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null;
     app.isQuitting = true;
-    if (workWindow && !workWindow.isDestroyed()) {
-      workWindow.destroy();
+    if (linkedInWindow && !linkedInWindow.isDestroyed()) {
+      linkedInWindow.destroy();
+    }
+    if (whatsAppWindow && !whatsAppWindow.isDestroyed()) {
+      whatsAppWindow.destroy();
+    }
+    if (zohoWindow && !zohoWindow.isDestroyed()) {
+      zohoWindow.destroy();
     }
     app.quit();
   });
@@ -130,36 +509,79 @@ function startInternalServer() {
       try {
         // 1. Estado del navegador embebido
         if (urlPath === '/status' && req.method === 'GET') {
-          const win = getOrCreateWorkWindow(false);
-          const currentUrl = win ? win.webContents.getURL() : '';
-          const cookies = await session.fromPartition(WORK_PARTITION_NAME).cookies.get({ domain: '.linkedin.com' });
+          const liWin = getOrCreateLinkedInWindow(false);
+          const waWin = getOrCreateWhatsAppWindow(false);
+          const zoWin = zohoWindow && !zohoWindow.isDestroyed() ? zohoWindow : null;
+          const liUrl = liWin ? liWin.webContents.getURL() : '';
+          const waUrl = waWin ? waWin.webContents.getURL() : '';
+          const zoUrl = zoWin ? zoWin.webContents.getURL() : '';
+          const cookies = await session.fromPartition(LI_PARTITION_NAME).cookies.get({ domain: '.linkedin.com' });
           const hasLiAt = cookies.some((c) => c.name === 'li_at');
+
+          const zohoCookies = await session.fromPartition(ZOHO_PARTITION_NAME).cookies.get({ domain: '.zoho.com' });
+          const hasZoho = zohoCookies.some((c) => c.name === 'crmcsr');
+
+          // Verificación de sesión de WhatsApp Web en el Chromium aislado
+          let hasWhatsApp = cachedWhatsAppSession;
+          if (!hasWhatsApp) {
+            try {
+              const partitionDir = 'nexusreach_wa_session';
+              const waDbPath = path.join(app.getPath('userData'), 'Partitions', partitionDir, 'IndexedDB', 'https_web.whatsapp.com_0.indexeddb.leveldb');
+              if (fs.existsSync(waDbPath)) {
+                const entries = fs.readdirSync(waDbPath);
+                if (entries.some((f) => f.endsWith('.ldb') || (f.startsWith('MANIFEST') && entries.length > 2))) {
+                  hasWhatsApp = true;
+                  cachedWhatsAppSession = true;
+                }
+              }
+            } catch (e) {}
+          }
+
+          if (!hasWhatsApp && waWin && !waWin.isDestroyed()) {
+            const isAuth = await checkWhatsAppWebSession(waWin);
+            if (isAuth) hasWhatsApp = true;
+          }
 
           return sendJson(200, {
             ok: true,
             running: true,
             active: true,
             tipo: 'ELECTRON_CHROMIUM_ISOLATED',
-            url: currentUrl,
+            url: liUrl || waUrl || zoUrl,
+            linkedin_url: liUrl,
+            whatsapp_url: waUrl,
+            zoho_url: zoUrl,
             sesion_linkedin_activa: hasLiAt,
-            total_cookies_guardadas: cookies.length,
-            visible: win ? win.isVisible() : false
+            sesion_whatsapp_activa: hasWhatsApp,
+            sesion_zoho_activa: hasZoho,
+            total_cookies_guardadas: cookies.length + zohoCookies.length,
+            visible: Boolean((liWin && liWin.isVisible()) || (waWin && waWin.isVisible()) || (zoWin && zoWin.isVisible())),
+            linkedin_visible: Boolean(liWin && liWin.isVisible()),
+            whatsapp_visible: Boolean(waWin && waWin.isVisible()),
+            zoho_visible: Boolean(zoWin && zoWin.isVisible())
           });
         }
 
-        // 2. Navegar a una URL
+        // 2. Navegar a una URL (validada por Allowlist DomainGuard)
         if (urlPath === '/navigate' && req.method === 'POST') {
           const targetUrl = parsed.url;
           if (!targetUrl) return sendJson(400, { ok: false, error: 'Falta parametro url' });
 
-          const win = getOrCreateWorkWindow(false);
-          await new Promise((resolve, reject) => {
+          const allowZoho = Boolean(parsed.allow_zoho || targetUrl.includes('zoho'));
+          const check = isUrlAllowed(targetUrl, allowZoho);
+          if (!check.allowed) {
+            return sendJson(403, { ok: false, error: `Navegación bloqueada por Allowlist Guard: ${check.reason}` });
+          }
+
+          const channel = parsed.channel || check.channel || 'linkedin';
+          const win = getOrCreateWorkWindow(false, channel, targetUrl);
+          await new Promise((resolve) => {
             const timeout = setTimeout(() => resolve(), 12000); // 12s max
             win.webContents.once('did-finish-load', () => {
               clearTimeout(timeout);
               resolve();
             });
-            win.loadURL(targetUrl).catch((err) => {
+            win.loadURL(targetUrl).catch(() => {
               clearTimeout(timeout);
               resolve();
             });
@@ -167,72 +589,164 @@ function startInternalServer() {
 
           return sendJson(200, {
             ok: true,
+            channel: channel,
             url: win.webContents.getURL(),
             title: win.webContents.getTitle()
           });
         }
 
-        // 3. Evaluar JavaScript en el navegador de trabajo
+        // 3. Bloqueo de Evaluación Remota Arbitraria (C-01 Directrices v1.3)
         if (urlPath === '/evaluate' && req.method === 'POST') {
-          const script = parsed.script || parsed.code;
-          if (!script) return sendJson(400, { ok: false, error: 'Falta parametro script' });
-
-          const win = getOrCreateWorkWindow(false);
-          try {
-            // Si el script viene como función o IIFE
-            let executable = script.trim();
-            if (executable.startsWith('(') && executable.endsWith(')')) {
-              // ya envuelto
-            } else if (executable.startsWith('()') || executable.startsWith('function')) {
-              executable = `(${executable})()`;
-            }
-
-            const result = await win.webContents.executeJavaScript(executable);
-            return sendJson(200, { ok: true, result });
-          } catch (evalErr) {
-            console.warn('[Evaluate Warning]:', evalErr.message);
-            return sendJson(200, { ok: false, error: evalErr.message });
-          }
+          return sendJson(403, {
+            ok: false,
+            error: 'ACCESO_DENEGADO (C-01): La evaluación remota arbitraria de JavaScript (/evaluate) ha sido revocada permanentemente. Utilice comandos firmados Ed25519 con funciones precompiladas locales.'
+          });
         }
 
-        // 4. Mostrar el navegador de trabajo (para que el usuario inicie sesión)
+        // 4. Mostrar el navegador de trabajo (LinkedIn, WhatsApp Web o Zoho CRM)
         if (urlPath === '/show' && req.method === 'POST') {
-          const win = getOrCreateWorkWindow(true);
-          const cookies = await session.fromPartition(WORK_PARTITION_NAME).cookies.get({ domain: '.linkedin.com' });
-          const hasLiAt = cookies.some((c) => c.name === 'li_at');
+          const channel = parsed.channel || (parsed.url && parsed.url.includes('zoho') ? 'zoho' : parsed.url && parsed.url.includes('whatsapp') ? 'whatsapp' : 'linkedin');
 
-          const targetUrl = parsed.url || (!hasLiAt ? 'https://www.linkedin.com/login' : null);
-          if (targetUrl) {
-            win.loadURL(targetUrl).catch(() => {});
-          } else {
-            const currentUrl = win.webContents.getURL();
-            if (!currentUrl || currentUrl === 'about:blank') {
-              win.loadURL('https://www.linkedin.com/feed/').catch(() => {});
+          if (channel === 'zoho') {
+            const win = getOrCreateZohoWindow(true);
+            const zohoCookies = await session.fromPartition(ZOHO_PARTITION_NAME).cookies.get({ domain: '.zoho.com' });
+            const hasZoho = zohoCookies.some((c) => c.name === 'crmcsr');
+            const currentUrl = win.webContents.getURL() || '';
+            const isStuckOnSplash = currentUrl.includes('ShowHomePage.do') || (currentUrl.includes('crm.zoho.com') && !hasZoho);
+
+            let targetUrl = parsed.url;
+            if (!targetUrl) {
+              if (hasZoho) {
+                targetUrl = 'https://crm.zoho.com/crm/org902879914/tab/Home';
+              } else {
+                targetUrl = 'https://accounts.zoho.com/signin?servicename=ZohoCRM';
+              }
+            } else if (targetUrl.includes('crm.zoho.com') && !hasZoho) {
+              // Si se solicitó CRM pero no hay sesión activa, abrir la pantalla oficial de login para evitar el bucle de "Cargando"
+              targetUrl = 'https://accounts.zoho.com/signin?servicename=ZohoCRM';
             }
-          }
 
-          win.show();
-          win.focus();
-          return sendJson(200, {
-            ok: true,
-            visible: true,
-            url: win.webContents.getURL(),
-            sesion_linkedin_activa: hasLiAt
-          });
+            if (targetUrl && (currentUrl !== targetUrl || isStuckOnSplash)) {
+              win.loadURL(targetUrl).catch(() => {});
+            }
+            win.show();
+            win.focus();
+            return sendJson(200, {
+              ok: true,
+              channel: 'zoho',
+              visible: true,
+              url: win.webContents.getURL(),
+              sesion_zoho_activa: hasZoho
+            });
+          } else if (channel === 'whatsapp') {
+            const win = getOrCreateWhatsAppWindow(true);
+            if (parsed.url) {
+              win.loadURL(parsed.url).catch(() => {});
+            } else {
+              const currentUrl = win.webContents.getURL();
+              if (!currentUrl || currentUrl === 'about:blank') {
+                win.loadURL('https://web.whatsapp.com').catch(() => {});
+              }
+            }
+            win.show();
+            win.focus();
+            return sendJson(200, {
+              ok: true,
+              channel: 'whatsapp',
+              visible: true,
+              url: win.webContents.getURL(),
+              sesion_whatsapp_activa: cachedWhatsAppSession
+            });
+          } else {
+            const win = getOrCreateLinkedInWindow(true);
+            const cookies = await session.fromPartition(LI_PARTITION_NAME).cookies.get({ domain: '.linkedin.com' });
+            const hasLiAt = cookies.some((c) => c.name === 'li_at');
+
+            const targetUrl = parsed.url || (!hasLiAt ? 'https://www.linkedin.com/login' : null);
+            if (targetUrl) {
+              win.loadURL(targetUrl).catch(() => {});
+            } else {
+              const currentUrl = win.webContents.getURL();
+              if (!currentUrl || currentUrl === 'about:blank') {
+                win.loadURL('https://www.linkedin.com/feed/').catch(() => {});
+              }
+            }
+
+            win.show();
+            win.focus();
+            return sendJson(200, {
+              ok: true,
+              channel: 'linkedin',
+              visible: true,
+              url: win.webContents.getURL(),
+              sesion_linkedin_activa: hasLiAt,
+              sesion_whatsapp_activa: cachedWhatsAppSession
+            });
+          }
         }
 
         // 5. Ocultar el navegador de trabajo
         if (urlPath === '/hide' && req.method === 'POST') {
-          if (workWindow && !workWindow.isDestroyed()) {
-            workWindow.hide();
+          const channel = parsed.channel;
+          if (!channel || channel === 'linkedin') {
+            if (linkedInWindow && !linkedInWindow.isDestroyed()) linkedInWindow.hide();
+          }
+          if (!channel || channel === 'whatsapp') {
+            if (whatsAppWindow && !whatsAppWindow.isDestroyed()) whatsAppWindow.hide();
+          }
+          if (!channel || channel === 'zoho') {
+            if (zohoWindow && !zohoWindow.isDestroyed()) zohoWindow.hide();
           }
           return sendJson(200, { ok: true, visible: false });
+        }
+
+        // 5.1 Cerrar sesión y purgar cookies/caché de Zoho CRM
+        if (urlPath === '/zoho/logout' && req.method === 'POST') {
+          try {
+            const zohoSession = session.fromPartition(ZOHO_PARTITION_NAME);
+            const zohoCookies = await zohoSession.cookies.get({ domain: '.zoho.com' });
+            for (const cookie of zohoCookies) {
+              const prefix = cookie.secure ? 'https://' : 'http://';
+              const domain = cookie.domain.replace(/^\./, '');
+              const cookieUrl = `${prefix}${domain}${cookie.path}`;
+              await zohoSession.cookies.remove(cookieUrl, cookie.name).catch(() => {});
+            }
+
+            await zohoSession.clearStorageData({
+              origins: ['https://accounts.zoho.com', 'https://crm.zoho.com', 'https://zoho.com'],
+              storages: ['cookies', 'localstorage', 'indexdb', 'serviceworkers', 'cachestorage']
+            }).catch(() => {});
+
+            const win = getOrCreateZohoWindow(true);
+            await win.loadURL('https://accounts.zoho.com/logout').catch(() => {});
+            await win.loadURL('https://accounts.zoho.com/signin?servicename=ZohoCRM').catch(() => {});
+            win.show();
+            win.focus();
+
+            return sendJson(200, {
+              ok: true,
+              mensaje: 'Sesión de Zoho purgada exitosamente. Ventana reiniciada en pantalla de login.',
+              sesion_zoho_activa: false,
+              url: win.webContents.getURL()
+            });
+          } catch (logoutErr) {
+            console.error('[Zoho Logout Error]:', logoutErr.message);
+            return sendJson(500, { ok: false, error: logoutErr.message });
+          }
+        }
+
+        // 5.2 Reiniciar la aplicación de Electron en caliente
+        if (urlPath === '/restart' && req.method === 'POST') {
+          app.relaunch();
+          app.exit(0);
+          return sendJson(200, { ok: true, mensaje: 'Reiniciando aplicación de escritorio...' });
         }
 
         // 6. Clic biométrico nativo por coordenadas
         if (urlPath === '/click' && req.method === 'POST') {
           const { x, y } = parsed;
-          const win = getOrCreateWorkWindow(false);
+          const channel = parsed.channel || 'linkedin';
+          const win = getOrCreateWorkWindow(false, channel);
           if (typeof x === 'number' && typeof y === 'number') {
             win.webContents.sendInputEvent({ type: 'mouseMove', x, y });
             await new Promise((r) => setTimeout(r, 60));
@@ -246,7 +760,11 @@ function startInternalServer() {
 
         // 7. Control del Piloto Automático del Runner
         if (urlPath === '/worker/start' && req.method === 'POST') {
-          workerRunner.startWorker(getOrCreateWorkWindow);
+          const authOpts = {
+            sessionToken: parsed.session_token || parsed.sessionToken || null,
+            tenantId: parsed.tenant_id || parsed.tenantId || null
+          };
+          workerRunner.startWorker(getOrCreateWorkWindow, (authOpts.sessionToken || authOpts.tenantId) ? authOpts : null);
           return sendJson(200, { ok: true, status: workerRunner.getStatus() });
         }
 
@@ -255,8 +773,54 @@ function startInternalServer() {
           return sendJson(200, { ok: true, status: workerRunner.getStatus() });
         }
 
+        if (urlPath === '/worker/session' && req.method === 'POST') {
+          workerRunner.setAuthSession({
+            sessionToken: parsed.session_token || parsed.sessionToken || null,
+            tenantId: parsed.tenant_id || parsed.tenantId || null
+          });
+          return sendJson(200, { ok: true, status: workerRunner.getStatus() });
+        }
+
+        if (urlPath === '/worker/logout' && req.method === 'POST') {
+          workerRunner.clearAuthSession('Sesión cerrada por el usuario.');
+          return sendJson(200, { ok: true, status: workerRunner.getStatus() });
+        }
+
         if (urlPath === '/worker/status' && req.method === 'GET') {
           return sendJson(200, { ok: true, status: workerRunner.getStatus() });
+        }
+
+        if (urlPath === '/worker/forzar-siguiente' && req.method === 'POST') {
+          const authOpts = {
+            sessionToken: parsed.session_token || parsed.sessionToken || null,
+            tenantId: parsed.tenant_id || parsed.tenantId || null
+          };
+          const res = workerRunner.forceNextCycle(
+            getOrCreateWorkWindow,
+            (authOpts.sessionToken || authOpts.tenantId) ? authOpts : null
+          );
+          return sendJson(200, { ok: true, resultado: res, status: workerRunner.getStatus() });
+        }
+
+        // 8. Extracción Precompilada Segura de Red (Conexiones 1º Grado e Invitaciones)
+        if (urlPath === '/extract/network' && req.method === 'POST') {
+          const win = getOrCreateLinkedInWindow(false);
+          const result = await handleLinkedInExtractNetwork(win, parsed);
+          return sendJson(200, result);
+        }
+
+        // 9. Enriquecimiento / Extracción Precompilada Segura de Perfil en Vivo
+        if (urlPath === '/extract/profile' && req.method === 'POST') {
+          const win = getOrCreateLinkedInWindow(false);
+          const result = await handleLinkedInEnrichProfile(win, parsed);
+          return sendJson(200, result);
+        }
+
+        // 10. Extracción Precompilada Segura de Datos de Contacto 1º Grado (Overlay)
+        if (urlPath === '/extract/contact-info' && req.method === 'POST') {
+          const win = getOrCreateLinkedInWindow(false);
+          const result = await handleLinkedInReadContactInfo(win, parsed);
+          return sendJson(200, result);
         }
 
         return sendJson(404, { ok: false, error: 'Endpoint no encontrado' });
@@ -273,7 +837,26 @@ function startInternalServer() {
 
 // Inicialización de Electron
 app.whenReady().then(() => {
+  setupSessionGuardsAndListeners();
   createMainWindow();
+
+  // Proveedor seguro de sesión desde el proceso principal (solo lee el token de mainWindow si está en el origen local de la app)
+  workerRunner.setSessionProvider(async () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return null;
+    try {
+      const currentUrl = mainWindow.webContents.getURL() || '';
+      if (!currentUrl.startsWith('http://127.0.0.1:8000') && !currentUrl.startsWith('http://localhost:8000')) {
+        return null;
+      }
+      const tok = await mainWindow.webContents.executeJavaScript(
+        `window.sessionStorage ? window.sessionStorage.getItem('nexus_session_token') : null`
+      );
+      return tok ? { sessionToken: tok } : null;
+    } catch (e) {
+      return null;
+    }
+  });
+
   startInternalServer();
 
   app.on('activate', () => {

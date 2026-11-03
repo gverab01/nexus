@@ -186,27 +186,36 @@ export default function LoginView({ onLoginSuccess }) {
 
           {/* Accesos rápidos minimalistas */}
           <div className="pt-3 border-t border-white/[0.06] space-y-2">
-            <div className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider">
-              Acceso rápido para testing
+            <div className="flex items-center justify-between text-[10px] font-medium text-zinc-500 uppercase tracking-wider">
+              <span>Acceso rápido</span>
+              <span className="text-zinc-600 font-mono lowercase">click para rellenar</span>
             </div>
             
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
-                onClick={() => handleAutoFill('demo@nexusreach.com', 'demo123')}
-                className="p-2 rounded-md bg-[#0D0E12] hover:bg-zinc-800/40 border border-white/[0.06] hover:border-white/[0.12] transition text-left cursor-pointer flex flex-col gap-0.5"
+                onClick={() => handleAutoFill('admin@nexusreach.com', 'AdminNexus2026!')}
+                className="p-2.5 rounded-md bg-[#0D0E12] hover:bg-zinc-800/40 border border-white/[0.06] hover:border-emerald-500/30 transition text-left cursor-pointer flex flex-col gap-0.5 group"
               >
-                <span className="text-[11px] font-medium text-zinc-200">Operador Demo</span>
-                <span className="text-[10px] text-zinc-500 font-mono">Plan Pro</span>
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-medium text-zinc-200 group-hover:text-emerald-400 transition">Administrador</span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500/80" />
+                </div>
+                <span className="text-[10px] text-zinc-500 font-mono truncate">admin@nexusreach.com</span>
+                <span className="text-[9px] text-zinc-600 font-mono mt-0.5">AdminNexus2026!</span>
               </button>
 
               <button
                 type="button"
-                onClick={() => handleAutoFill('admin@nexusreach.com', 'admin123')}
-                className="p-2 rounded-md bg-[#0D0E12] hover:bg-zinc-800/40 border border-white/[0.06] hover:border-white/[0.12] transition text-left cursor-pointer flex flex-col gap-0.5"
+                onClick={() => handleAutoFill('operador@nexusreach.com', 'OperadorNexus2026!')}
+                className="p-2.5 rounded-md bg-[#0D0E12] hover:bg-zinc-800/40 border border-white/[0.06] hover:border-cyan-500/30 transition text-left cursor-pointer flex flex-col gap-0.5 group"
               >
-                <span className="text-[11px] font-medium text-zinc-200">Superadmin</span>
-                <span className="text-[10px] text-zinc-500 font-mono">Master Root</span>
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-medium text-zinc-200 group-hover:text-cyan-400 transition">Operador</span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-500/80" />
+                </div>
+                <span className="text-[10px] text-zinc-500 font-mono truncate">operador@nexusreach.com</span>
+                <span className="text-[9px] text-zinc-600 font-mono mt-0.5">OperadorNexus2026!</span>
               </button>
             </div>
           </div>

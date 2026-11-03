@@ -5,10 +5,16 @@
   "main": "main.cjs",
   "scripts": {
     "start": "electron main.cjs",
-    "dev": "electron main.cjs --dev"
+    "dev": "electron main.cjs --dev",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win --x64",
+    "dist:mac": "electron-builder --mac"
   },
-  "dependencies": {},
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  },
   "devDependencies": {
-    "electron": "^33.2.1"
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8"
   }
 }

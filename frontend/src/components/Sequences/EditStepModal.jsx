@@ -46,6 +46,11 @@ export default function EditStepModal({ step, onClose, onSave, onDelete }) {
       p.cuerpo_email = cuerpo;
       p.cuerpo = cuerpo;
       p.asunto = p.asunto || 'Contacto institucional';
+    } else if (step.tipo === 'ENVIAR_WHATSAPP_WEB') {
+      const msg = p.plantilla_mensaje || p.mensaje || p.plantilla || '';
+      p.plantilla_mensaje = msg;
+      p.mensaje = msg;
+      p.canal = 'whatsapp_web';
     }
 
     onSave({
@@ -176,6 +181,41 @@ export default function EditStepModal({ step, onClose, onSave, onDelete }) {
                   className="w-full bg-zinc-950 border border-zinc-800 px-3 py-1.5 rounded-lg text-zinc-200 focus:outline-hidden focus:border-sky-500 font-sans"
                 />
               </div>
+            </div>
+          )}
+
+          {step.tipo === 'ENVIAR_WHATSAPP_WEB' && (
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-zinc-400 font-medium">Mensaje WhatsApp Web (Local Antiban)</label>
+                <span className="text-[10px] text-emerald-400 font-mono flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                  WhatsApp Web Local
+                </span>
+              </div>
+              <textarea 
+                rows={4}
+                value={parametros.plantilla_mensaje ?? parametros.mensaje ?? parametros.plantilla ?? ''}
+                onChange={(e) => {
+                  handleParamChange('plantilla_mensaje', e.target.value);
+                  handleParamChange('mensaje', e.target.value);
+                }}
+                placeholder="{Hola|Buenos días} {nombre}, un gusto saludarte. Te contacto por tu rol en {empresa}..."
+                className="w-full bg-zinc-950 border border-zinc-800 px-3 py-1.5 rounded-lg text-zinc-200 focus:outline-hidden focus:border-sky-500 font-sans"
+              />
+              <span className="text-[10px] text-zinc-500 mt-1 block">
+                Variables dinámicas: {'{nombre}'}, {'{empresa}'}, {'{cargo}'}. Soporta Spintax: {'{Hola|Buenos días|Estimado/a}'}. Se enviará directamente a través de WhatsApp Web con demoras humanas.
+              </span>
+            </div>
+          )}
+
+          {(step.tipo === 'EXTRAER_CORREO' || step.tipo === 'RESOLVER_CORREO') && (
+            <div className="p-3.5 rounded-lg bg-zinc-950/80 border border-zinc-800 space-y-2 text-xs">
+              <span className="font-semibold text-zinc-200 block">Estrategia de Enriquecimiento en Cascada</span>
+              <p className="text-[11px] text-zinc-400 leading-relaxed">
+                1. <strong>1er Grado (Conectado):</strong> Accede a la ficha de contacto de LinkedIn y extrae el email público.<br/>
+                2. <strong>2º / 3º Grado o Privado (Waterfall):</strong> Detecta dominio corporativo, consulta APIs externas (Hunter/Dropcontact), genera patrones de correo institucionales y valida sintaxis, registros MX y ping SMTP antes de guardar.
+              </p>
             </div>
           )}
 

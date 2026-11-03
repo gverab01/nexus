@@ -2,18 +2,26 @@ import os
 import json
 import random
 import time
+import re
+from urllib.parse import quote
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from database import get_db
 import safety_engine
 import browser_service
+import whatsapp_safety_engine
+import zoho_browser_service
 
 # ==============================================================================
 # MOTOR DE SECUENCIAS MULTICANAL Y ÁRBOLES DE DECISIÓN (NexusReach Pro)
 # ==============================================================================
 
 def get_sequences(tenant_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-    """Obtains list of available sequences with aggregated metrics and associated lists."""
+    """Obtiene la lista de secuencias disponibles con sus métricas agregadas y listas asociadas."""
+    try:
+        promote_expired_delays()
+    except Exception:
+        pass
     with get_db() as conn:
         cursor = conn.cursor()
         where_filter = ""
@@ -28,30 +36,48 @@ def get_sequences(tenant_ids: Optional[List[str]] = None) -> List[Dict[str, Any]
                 (SELECT COUNT(*) FROM pasos_secuencia WHERE secuencia_id = s.id) as total_pasos,
                 (SELECT COUNT(*) FROM leads_en_secuencia WHERE secuencia_id = s.id) as total_leads,
                 (SELECT COUNT(*) FROM leads_en_secuencia WHERE secuencia_id = s.id AND estado = 'EN_CURSO') as leads_en_curso,
-                (SELECT COUNT(*) FROM leads_en_secuencia WHERE secuencia_id = s.id AND estado = 'COMPLETADO') as leads_completados
+                (SELECT COUNT(*) FROM leads_en_secuencia WHERE secuencia_id = s.id AND estado IN ('COMPLETADO', 'FINALIZADA', 'FINALIZADO')) as leads_completados
             FROM secuencias s
             {where_filter}
             ORDER BY s.es_default DESC, s.created_at DESC
         """, params)
         sequences = cursor.fetchall()
 
-        for s in sequences:
-            cursor.execute("""
-                SELECT l.id, l.nombre, l.estado, sl.activa as vinculo_activo,
+        sec_ids = [s["id"] for s in sequences]
+        lists_map = {s["id"]: [] for s in sequences}
+        if sec_ids:
+            sec_ph = ", ".join(["?"] * len(sec_ids))
+            cursor.execute(f"""
+                SELECT sl.secuencia_id, l.id, l.nombre, l.estado, sl.activa as vinculo_activo,
                        (SELECT COUNT(*) FROM leads_en_lista WHERE lista_id = l.id) as total_leads
                 FROM secuencia_listas sl
                 JOIN listas_leads l ON sl.lista_id = l.id
-                WHERE sl.secuencia_id = ?
-            """, (s["id"],))
-            s["listas_asociadas"] = cursor.fetchall()
+                WHERE sl.secuencia_id IN ({sec_ph})
+            """, sec_ids)
+            for row in cursor.fetchall():
+                lists_map[row["secuencia_id"]].append(dict(row))
+
+        for s in sequences:
+            s["listas_asociadas"] = lists_map.get(s["id"], [])
 
         return sequences
 
 def change_sequence_publish_status(sequence_id: str, new_status: str) -> bool:
-    """Changes publication status of a sequence between 'PUBLICADA' (active) and 'PAUSADA'."""
+    """Cambia el estado de una secuencia entre 'BORRADOR', 'PUBLICADA' (activa) y 'PAUSADA'."""
     now_iso = datetime.now().isoformat()
-    is_active = 1 if new_status.upper() in ('PUBLICADA', 'ACTIVA') else 0
-    normalized_status = 'PUBLICADA' if is_active else 'PAUSADA'
+    norm = (new_status or "").upper().strip()
+    if norm in ('PUBLICADA', 'ACTIVA', 'PUBLICADO'):
+        normalized_status = 'PUBLICADA'
+        is_active = 1
+    elif norm in ('PAUSADA', 'DESACTIVADA', 'INACTIVA', 'PAUSADO'):
+        normalized_status = 'PAUSADA'
+        is_active = 0
+    elif norm in ('BORRADOR', 'DRAFT'):
+        normalized_status = 'BORRADOR'
+        is_active = 0
+    else:
+        normalized_status = 'BORRADOR'
+        is_active = 0
     
     with get_db() as conn:
         cursor = conn.cursor()
@@ -68,6 +94,10 @@ def get_full_sequence(sequence_id: str, secuencia_id: Optional[str] = None) -> O
     """
     target_id = sequence_id or secuencia_id
     secuencia_id = target_id
+    try:
+        promote_expired_delays(sequence_id=secuencia_id)
+    except Exception:
+        pass
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM secuencias WHERE id = ?", (target_id,))
@@ -79,8 +109,8 @@ def get_full_sequence(sequence_id: str, secuencia_id: Optional[str] = None) -> O
         cursor.execute("""
             SELECT p.*,
                 (SELECT COUNT(*) FROM leads_en_secuencia WHERE secuencia_id = ? AND paso_actual_id = p.id AND estado = 'EN_CURSO') as leads_en_paso,
-                (SELECT COUNT(*) FROM leads_en_secuencia WHERE secuencia_id = ? AND paso_actual_id = p.id AND estado = 'EN_CURSO' AND proxima_ejecucion_at <= ?) as leads_listos,
-                (SELECT COUNT(*) FROM leads_en_secuencia WHERE secuencia_id = ? AND paso_actual_id = p.id AND estado = 'EN_CURSO' AND proxima_ejecucion_at > ?) as leads_en_espera
+                (SELECT COUNT(*) FROM leads_en_secuencia WHERE secuencia_id = ? AND paso_actual_id = p.id AND estado = 'EN_CURSO' AND (proxima_ejecucion_at IS NULL OR proxima_ejecucion_at <= ?)) as leads_listos,
+                (SELECT COUNT(*) FROM leads_en_secuencia WHERE secuencia_id = ? AND paso_actual_id = p.id AND estado = 'EN_CURSO' AND proxima_ejecucion_at IS NOT NULL AND proxima_ejecucion_at > ?) as leads_en_espera
             FROM pasos_secuencia p
             WHERE p.secuencia_id = ? 
             ORDER BY p.orden ASC, p.created_at ASC
@@ -103,13 +133,54 @@ def get_full_sequence(sequence_id: str, secuencia_id: Optional[str] = None) -> O
         cursor.execute("""
             SELECT 
                 (SELECT COUNT(*) FROM leads_en_secuencia WHERE secuencia_id = ? AND estado = 'EN_CURSO') as total_en_curso,
-                (SELECT COUNT(*) FROM leads_en_secuencia WHERE secuencia_id = ? AND estado = 'COMPLETADO') as total_completados,
+                (SELECT COUNT(*) FROM leads_en_secuencia WHERE secuencia_id = ? AND estado IN ('COMPLETADO', 'FINALIZADA', 'FINALIZADO')) as total_completados,
                 (SELECT COUNT(*) FROM leads_en_secuencia WHERE secuencia_id = ?) as total_inscritos
         """, (secuencia_id, secuencia_id, secuencia_id))
         metrics = cursor.fetchone() or {}
         sec["total_en_curso"] = metrics.get("total_en_curso", 0)
         sec["total_completados"] = metrics.get("total_completados", 0)
         sec["total_inscritos"] = metrics.get("total_inscritos", 0)
+
+        # Calcular métricas de flujo para cada paso (entrantes, en circulación, salientes)
+        cursor.execute("""
+            SELECT ls.lead_id, ls.paso_actual_id, ls.estado, p.orden as paso_orden
+            FROM leads_en_secuencia ls
+            LEFT JOIN pasos_secuencia p ON ls.paso_actual_id = p.id
+            WHERE ls.secuencia_id = ?
+        """, (secuencia_id,))
+        leads_distribution = cursor.fetchall()
+
+        total_inscritos = sec["total_inscritos"]
+        total_pasos = len(pasos)
+        for idx_p, p in enumerate(pasos):
+            p_orden = p.get("orden", 1)
+            p_id = p["id"]
+            is_last_step = (idx_p == total_pasos - 1)
+
+            # Leads actualmente en este paso en ejecución
+            en_paso = sum(1 for l in leads_distribution if l["paso_actual_id"] == p_id and l["estado"] == "EN_CURSO")
+
+            # Leads que ya pasaron por este paso
+            salientes = 0
+            for l in leads_distribution:
+                if l["estado"] in ("COMPLETADO", "FINALIZADA", "FINALIZADO"):
+                    salientes += 1
+                elif l["paso_actual_id"] != p_id:
+                    l_orden = l.get("paso_orden") or 0
+                    if l_orden > p_orden:
+                        salientes += 1
+
+            if p_orden == 1 or p.get("padre_paso_id") is None:
+                entrantes = total_inscritos
+            else:
+                entrantes = en_paso + salientes
+
+            p["leads_entrantes"] = entrantes
+            p["leads_en_paso"] = en_paso
+            p["leads_salientes"] = salientes
+            p["es_ultimo_paso"] = is_last_step
+            p["porcentaje_salida"] = round((salientes / entrantes * 100), 1) if entrantes > 0 else 0
+
 
         # Próximo lead candidato
         cursor.execute("""
@@ -132,31 +203,43 @@ def get_full_sequence(sequence_id: str, secuencia_id: Optional[str] = None) -> O
             prox["listo_ahora"] = 1 if (prox.get("proxima_ejecucion_at") or "") <= ahora_iso else 0
         sec["proximo_lead"] = prox
 
+        sec_tenant = sec.get("tenant_id") or "ten_superadmin"
         cursor.execute("""
             SELECT l.id, l.nombre, l.estado, sl.activa as vinculo_activo, sl.auto_ingresar_nuevos,
                    (SELECT COUNT(*) FROM leads_en_lista WHERE lista_id = l.id) as total_leads
             FROM secuencia_listas sl
             JOIN listas_leads l ON sl.lista_id = l.id
-            WHERE sl.secuencia_id = ?
-        """, (secuencia_id,))
+            WHERE sl.secuencia_id = ? AND l.tenant_id = ?
+        """, (secuencia_id, sec_tenant))
         sec["listas_asociadas"] = cursor.fetchall()
 
         return sec
 
-def create_sequence(name: str, description: str = "", active: bool = True, template: str = "multicanal", tenant_id: str = "ten_superadmin") -> Dict[str, Any]:
-    """Creates a new sequence and optionally populates default steps according to template."""
+def create_sequence(name: str, description: str = "", active: bool = False, template: str = "multicanal", tenant_id: str = "ten_superadmin", estado: str = "BORRADOR") -> Dict[str, Any]:
+    """Crea una nueva secuencia comenzando en BORRADOR por defecto, poblada con pasos de plantilla."""
     now_iso = datetime.now().isoformat()
     sec_id = f"sec-{int(time.time())}"
+    norm_estado = (estado or "").upper().strip()
+    if norm_estado in ('PUBLICADA', 'ACTIVA') and active:
+        final_estado = 'PUBLICADA'
+        is_active = 1
+    elif norm_estado in ('PAUSADA', 'DESACTIVADA'):
+        final_estado = 'PAUSADA'
+        is_active = 0
+    else:
+        final_estado = 'BORRADOR'
+        is_active = 0
+
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO secuencias (id, nombre, descripcion, activa, es_default, tenant_id, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 0, ?, ?, ?)
-        """, (sec_id, name, description, 1 if active else 0, tenant_id, now_iso, now_iso))
+            INSERT INTO secuencias (id, nombre, descripcion, activa, es_default, estado, tenant_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)
+        """, (sec_id, name, description, is_active, final_estado, tenant_id, now_iso, now_iso))
 
         # Create steps according to selected template
         steps_tpl = []
-        if template == "multicanal":
+        if template in ("trilateral_multicanal", "multicanal"):
             steps_tpl = [
                 ("step-1", None, "DEFAULT", "VISITAR_PERFIL", {
                     "tiempo_lectura_min_seg": 6,
@@ -202,13 +285,21 @@ def create_sequence(name: str, description: str = "", active: bool = True, templ
                     "etiqueta": "6B. [Si NO Conectó] Enviar Email Google Workspace"
                 }, 6),
                 ("step-7b", "step-6b", "DEFAULT", "ESPERAR", {
-                    "horas_espera": 168,
-                    "etiqueta": "7B. Esperar 7 Días (168 hrs)"
+                    "horas_espera": 48,
+                    "etiqueta": "7B. Esperar 48 Horas (2 Días)"
                 }, 7),
-                ("step-8b", "step-7b", "DEFAULT", "RETIRAR_INVITACION", {
+                ("step-8b", "step-7b", "DEFAULT", "ENVIAR_WHATSAPP_WEB", {
+                    "plantilla_mensaje": "{Hola|Buenos días} {nombre}, un gusto saludarte. Te contacto en relación a tu labor en {empresa}. Te había enviado un correo anteriormente y quería dejarte mi contacto directo por WhatsApp.",
+                    "etiqueta": "8B. [WhatsApp Antiban] Mensaje WhatsApp Web Local"
+                }, 8),
+                ("step-9b", "step-8b", "DEFAULT", "ESPERAR", {
+                    "horas_espera": 96,
+                    "etiqueta": "9B. Esperar 4 Días (96 hrs)"
+                }, 9),
+                ("step-10b", "step-9b", "DEFAULT", "RETIRAR_INVITACION", {
                     "motivo": "Retiro automático por falta de respuesta para proteger ratio de cuenta",
-                    "etiqueta": "8B. Retirar Solicitud de Conexión en LinkedIn"
-                }, 8)
+                    "etiqueta": "10B. Retirar Solicitud de Conexión en LinkedIn"
+                }, 10)
             ]
         elif template == "linkedin_lineal":
             steps_tpl = [
@@ -253,6 +344,21 @@ def create_sequence(name: str, description: str = "", active: bool = True, templ
                     "etiqueta": "3. Correo de Seguimiento Follow-up"
                 }, 3)
             ]
+        elif template == "whatsapp_lineal":
+            steps_tpl = [
+                ("step-1", None, "DEFAULT", "ENVIAR_WHATSAPP_WEB", {
+                    "plantilla_mensaje": "{Hola|Buenos días} {nombre}, un gusto saludarte. Te escribo con relación a tu rol en {empresa}...",
+                    "etiqueta": "1. Mensaje de Presentación WhatsApp Web (Local Antiban)"
+                }, 1),
+                ("step-2", "step-1", "DEFAULT", "ESPERAR", {
+                    "horas_espera": 72,
+                    "etiqueta": "2. Pausa Antiban de 3 Días (72 Horas)"
+                }, 2),
+                ("step-3", "step-2", "DEFAULT", "ENVIAR_WHATSAPP_WEB", {
+                    "plantilla_mensaje": "Hola {nombre}, espero que tengas una excelente semana. Quería consultar si tuviste oportunidad de revisar mi mensaje anterior...",
+                    "etiqueta": "3. Mensaje de Seguimiento WhatsApp Web"
+                }, 3)
+            ]
         else: # vacia
             steps_tpl = [
                 ("step-1", None, "DEFAULT", "VISITAR_PERFIL", {
@@ -273,7 +379,7 @@ def create_sequence(name: str, description: str = "", active: bool = True, templ
     return get_full_sequence(sec_id)
 
 def update_sequence(sequence_id: str, name: Optional[str] = None, description: Optional[str] = None, active: Optional[bool] = None) -> bool:
-    """Updates sequence metadata."""
+    """Actualiza los metadatos de una secuencia existente."""
     now_iso = datetime.now().isoformat()
     with get_db() as conn:
         cursor = conn.cursor()
@@ -300,7 +406,7 @@ def update_sequence(sequence_id: str, name: Optional[str] = None, description: O
         return True
 
 def delete_sequence(sequence_id: str) -> bool:
-    """Deletes a sequence and its steps (cascade)."""
+    """Elimina una secuencia y sus pasos asociados en cascada."""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM pasos_secuencia WHERE secuencia_id = ?", (sequence_id,))
@@ -310,7 +416,7 @@ def delete_sequence(sequence_id: str) -> bool:
         return True
 
 def add_sequence_step(sequence_id: str, step_data: Dict[str, Any], position: str = "final", reference_step_id: Optional[str] = None) -> Dict[str, Any]:
-    """Inserts a new step into the sequence and reorganizes step ordering."""
+    """Inserta un nuevo paso en la secuencia y reorganiza el orden correlativo."""
     now_iso = datetime.now().isoformat()
     new_id = f"step-{sequence_id}-{int(time.time())}-{random.randint(100, 999)}"
     action_type = step_data.get("tipo_accion", "ESPERAR")
@@ -372,7 +478,7 @@ def add_sequence_step(sequence_id: str, step_data: Dict[str, Any], position: str
     }
 
 def delete_sequence_step(sequence_id: str, step_id: str) -> bool:
-    """Deletes a step from the sequence and migrates or completes enqueued leads."""
+    """Elimina un paso de la secuencia y migra o finaliza los leads en cola."""
     now_iso = datetime.now().isoformat()
     with get_db() as conn:
         cursor = conn.cursor()
@@ -421,7 +527,7 @@ def delete_sequence_step(sequence_id: str, step_id: str) -> bool:
         return True
 
 def save_sequence_steps(sequence_id: str, steps: List[Dict[str, Any]]) -> bool:
-    """Replaces or saves the complete step tree for a sequence."""
+    """Reemplaza o guarda el árbol completo de pasos para una secuencia dada."""
     now_iso = datetime.now().isoformat()
     with get_db() as conn:
         cursor = conn.cursor()
@@ -457,9 +563,7 @@ def save_sequence_steps(sequence_id: str, steps: List[Dict[str, Any]]) -> bool:
 # ==============================================================================
 
 def assign_leads_to_sequence(sequence_id: str, lead_ids: List[str]) -> Dict[str, Any]:
-    """
-    Assigns a list of leads to the specified sequence at its root (initial) step.
-    """
+    """Asigna una lista de prospectos a la secuencia especificada en su paso inicial raíz."""
     now = datetime.now()
     now_iso = now.isoformat()
     
@@ -479,8 +583,19 @@ def assign_leads_to_sequence(sequence_id: str, lead_ids: List[str]) -> Dict[str,
         assigned = 0
         skipped = 0
 
+        cursor.execute("SELECT tenant_id FROM secuencias WHERE id = ?", (sequence_id,))
+        sec_row = cursor.fetchone()
+        sec_tenant = sec_row.get("tenant_id") if sec_row else None
+
         for lid in lead_ids:
             try:
+                if sec_tenant:
+                    cursor.execute("SELECT tenant_id FROM leads WHERE id = ?", (lid,))
+                    l_row = cursor.fetchone()
+                    if l_row and l_row.get("tenant_id") and l_row["tenant_id"] != sec_tenant:
+                        skipped += 1
+                        continue
+
                 cursor.execute("""
                     INSERT INTO leads_en_secuencia (
                         id, lead_id, secuencia_id, paso_actual_id, estado, proxima_ejecucion_at, created_at, updated_at
@@ -503,11 +618,13 @@ def assign_leads_to_sequence(sequence_id: str, lead_ids: List[str]) -> Dict[str,
         }
 
 def get_leads_in_sequence(sequence_id: str, status: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Obtains leads enrolled in the sequence with their current step and execution state."""
+    """Obtiene los prospectos inscritos en la secuencia con su paso actual y estado de ejecución."""
     with get_db() as conn:
         cursor = conn.cursor()
         query = """
-            SELECT ls.*, l.nombre, l.cargo_actual, l.cargo_titular, l.institucion_actual, l.email, l.telefono, l.perfil_url, l.estado as lead_estado,
+            SELECT ls.*, l.nombre, l.cargo_actual, l.cargo_titular, l.institucion_actual, l.ubicacion, l.email, l.telefono, l.perfil_url, l.estado as lead_estado,
+                   l.email_extracted, l.email_source, l.email_status, l.empresa_dominio, l.email_zoho, l.zoho_entidad_tipo, l.zoho_id, l.zoho_lead_status,
+                   l.zoho_cuenta_nombre, l.zoho_cuenta_dueno, l.zoho_cuenta_es_cliente, l.zoho_synced_at, l.notas, l.tags,
                    p.tipo_accion as paso_accion, p.condicion_rama as paso_condicion, p.orden as paso_orden, p.parametros_json
             FROM leads_en_secuencia ls
             JOIN leads l ON ls.lead_id = l.id
@@ -516,8 +633,11 @@ def get_leads_in_sequence(sequence_id: str, status: Optional[str] = None) -> Lis
         """
         params = [sequence_id]
         if status:
-            query += " AND ls.estado = ?"
-            params.append(status)
+            if status.upper() in ('COMPLETADO', 'FINALIZADA', 'FINALIZADO'):
+                query += " AND ls.estado IN ('COMPLETADO', 'FINALIZADA', 'FINALIZADO')"
+            else:
+                query += " AND ls.estado = ?"
+                params.append(status)
         query += " ORDER BY ls.proxima_ejecucion_at ASC"
         cursor.execute(query, params)
         raw_leads = cursor.fetchall()
@@ -535,9 +655,7 @@ def get_leads_in_sequence(sequence_id: str, status: Optional[str] = None) -> Lis
 # ==============================================================================
 
 def get_next_executable_lead(sequence_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """
-    Finds the next lead whose delay has elapsed and is ready for step execution.
-    """
+    """Encuentra el siguiente prospecto cuyo plazo de espera ha vencido y está listo para ejecución."""
     now_iso = datetime.now().isoformat()
     with get_db() as conn:
         cursor = conn.cursor()
@@ -550,6 +668,7 @@ def get_next_executable_lead(sequence_id: Optional[str] = None) -> Optional[Dict
             JOIN secuencias s ON ls.secuencia_id = s.id
             WHERE ls.estado = 'EN_CURSO'
               AND s.activa = 1
+              AND s.estado = 'PUBLICADA'
               AND ls.proxima_ejecucion_at <= ?
         """
         params = [now_iso]
@@ -561,10 +680,7 @@ def get_next_executable_lead(sequence_id: Optional[str] = None) -> Optional[Dict
         return cursor.fetchone()
 
 def execute_next_step(sequence_id: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Main entry point: finds the next eligible lead and executes its atomic step.
-    Enforces safety restrictions from safety_engine.
-    """
+    """Punto de entrada principal: localiza el siguiente prospecto elegible y ejecuta su paso atómico aplicando restricciones de seguridad antiban."""
     import logger_service
 
     # 1. Pre-execution Safety Audit
@@ -602,9 +718,7 @@ def execute_next_step(sequence_id: Optional[str] = None) -> Dict[str, Any]:
     return _process_step_atom(lead_item)
 
 def _process_step_atom(item: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Executes the corresponding step for an individual lead and advances the tree.
-    """
+    """Ejecuta el paso correspondiente para un prospecto individual y avanza el árbol de decisión."""
     import logger_service
     lead_id = item["lead_id"]
     lead_name = item["nombre"]
@@ -682,8 +796,8 @@ def _process_step_atom(item: Dict[str, Any]) -> Dict[str, Any]:
     # =========================================================================
     elif action_type == "ENVIAR_INVITACION":
         profile_url = item.get("perfil_url")
-        browser_service.open_profile_in_browseros(profile_url, lead_name)
-        time.sleep(3)
+        if not profile_url:
+            return {"status": "error", "mensaje": f"El lead {lead_name} no tiene URL de LinkedIn."}
 
         note_final = ""
         if params.get("incluir_nota"):
@@ -700,33 +814,84 @@ def _process_step_atom(item: Dict[str, Any]) -> Dict[str, Any]:
 
             note_final = safety_engine.process_spintax(text_var)
 
-        click_script = """
-            (() => {
-                const allButtons = Array.from(document.querySelectorAll('button'));
-                let btn = allButtons.find(b => {
+        # 1. Resolver enlace directo custom-invite para navegación limpia y consistente
+        vanity_match = re.search(r'/in/([^/?#]+)', profile_url)
+        vanity_name = vanity_match.group(1) if vanity_match else None
+        invite_url = f"https://www.linkedin.com/preload/custom-invite/?vanityName={vanity_name}" if vanity_name else profile_url
+
+        browser_service.open_profile_in_browseros(invite_url, lead_name)
+        time.sleep(3.5)
+
+        # 2. Despachar envío de la invitación
+        send_script = f"""
+            (() => {{
+                const btns = Array.from(document.querySelectorAll('button, a'));
+                const sendWithoutNoteBtn = btns.find(b => {{
                     const txt = b.innerText.trim().toLowerCase();
-                    return txt === 'conectar' || txt.includes('connect');
-                });
-                
-                if (!btn) {
-                    const moreBtn = allButtons.find(b => b.getAttribute('aria-label') && b.getAttribute('aria-label').toLowerCase().includes('más acciones'));
-                    if (moreBtn) {
-                        moreBtn.click();
-                        return { ok: true, accion: 'abrio_menu_mas' };
-                    }
-                }
-                
-                if (btn) {
-                    const r = btn.getBoundingClientRect();
-                    const randX = r.left + (r.width * (0.25 + Math.random() * 0.5));
-                    const randY = r.top + (r.height * (0.25 + Math.random() * 0.5));
-                    btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: randX, clientY: randY }));
-                    return { ok: true, accion: 'clic_conectar', clientX: Math.round(randX), clientY: Math.round(randY) };
-                }
-                return { ok: false, error: 'Boton conectar no disponible o ya conectado' };
-            })()
+                    const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+                    return txt.includes('enviar sin nota') || aria.includes('enviar sin nota') ||
+                           txt.includes('send without a note') || aria.includes('send without a note') ||
+                           txt === 'enviar' || txt === 'send';
+                }});
+
+                const addNoteBtn = btns.find(b => {{
+                    const txt = b.innerText.trim().toLowerCase();
+                    const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+                    return txt.includes('añadir una nota') || aria.includes('añadir una nota') ||
+                           txt.includes('add a note') || aria.includes('add a note');
+                }});
+
+                const hasNote = {"true" if note_final else "false"};
+
+                if (hasNote && addNoteBtn) {{
+                    addNoteBtn.click();
+                    return {{ ok: true, accion: 'abrio_campo_nota' }};
+                }} else if (sendWithoutNoteBtn) {{
+                    sendWithoutNoteBtn.click();
+                    return {{ ok: true, accion: 'invitacion_enviada_sin_nota' }};
+                }}
+
+                // Fallback para perfil tradicional
+                const connectBtn = btns.find(b => {{
+                    const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+                    const txt = b.innerText.trim().toLowerCase();
+                    return (aria.includes('a conectar') || txt === 'conectar' || txt.includes('connect')) &&
+                           !aria.includes('cancelar') && !aria.includes('descartar');
+                }});
+
+                if (connectBtn) {{
+                    connectBtn.click();
+                    return {{ ok: true, accion: 'clic_conectar_perfil' }};
+                }}
+
+                return {{ ok: false, error: 'No se encontró botón conectar ni diálogo de envío' }};
+            }})()
         """
-        eval_res = browser_service._call_mcp_evaluate(click_script)
+        eval_res = browser_service._call_mcp_evaluate(send_script)
+        time.sleep(2)
+
+        if note_final and eval_res.get("accion") == "abrio_campo_nota":
+            fill_and_send_script = f"""
+                (() => {{
+                    const textarea = document.querySelector('textarea[name="message"], #custom-message, textarea');
+                    if (textarea) {{
+                        textarea.value = {json.dumps(note_final)};
+                        textarea.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        textarea.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    }}
+                    const sendBtn = Array.from(document.querySelectorAll('button')).find(b => {{
+                        const txt = b.innerText.trim().toLowerCase();
+                        return txt === 'enviar' || txt === 'send';
+                    }});
+                    if (sendBtn) {{
+                        sendBtn.click();
+                        return {{ ok: true, accion: 'invitacion_con_nota_enviada' }};
+                    }}
+                    return {{ ok: false, error: 'Botón enviar tras nota no encontrado' }};
+                }})()
+            """
+            browser_service._call_mcp_evaluate(fill_and_send_script)
+            time.sleep(2)
 
         with get_db() as conn:
             cursor = conn.cursor()
@@ -734,9 +899,9 @@ def _process_step_atom(item: Dict[str, Any]) -> Dict[str, Any]:
             cursor.execute("""
                 INSERT INTO historial_actividades (lead_id, tipo_evento, descripcion, timestamp)
                 VALUES (?, 'INVITACION_ENVIADA_SECUENCIA', ?, ?)
-            """, (lead_id, f"Invitación a conectar enviada vía secuencia. Nota: '{note_final[:60]}...'", now_iso))
+            """, (lead_id, f"Invitación a conectar enviada vía secuencia. Nota: '{note_final[:60]}...'" if note_final else "Invitación a conectar enviada vía secuencia en LinkedIn (sin nota). Estado: Pendiente.", now_iso))
 
-        execution_result["detalle"] = f"Invitación despachada a {lead_name}. Nota: '{note_final[:40]}...'"
+        execution_result["detalle"] = f"Invitación despachada a {lead_name}. Nota: '{note_final[:40]}...'" if note_final else f"Invitación a conectar enviada exitosamente a {lead_name} (sin nota)."
 
     # =========================================================================
     # ACTION 4: VERIFICAR_ESTADO (Branch condition)
@@ -749,8 +914,60 @@ def _process_step_atom(item: Dict[str, Any]) -> Dict[str, Any]:
             current_status = lead_db["estado"] if lead_db else item["lead_estado"]
 
         is_connected = current_status == "CONECTADO"
+
+        # Verificación en vivo si aún no figura como CONECTADO en base de datos
+        if not is_connected and item.get("perfil_url") and browser_service.is_browseros_running():
+            try:
+                browser_service.open_profile_in_browseros(item["perfil_url"], lead_name)
+                time.sleep(3.2)
+                check_conn_js = """
+                (() => {
+                    const text = (document.body.innerText || '').toLowerCase();
+                    
+                    // 1. Detectar botones o enlaces interactivos a mensajería directa (1er grado)
+                    const interactiveEls = Array.from(document.querySelectorAll('main button, main a, div[data-sdui-screen] button, div[data-sdui-screen] a'));
+                    const hasMsgAction = interactiveEls.some(el => {
+                        const t = (el.innerText || '').toLowerCase().trim();
+                        const href = (el.getAttribute('href') || '').toLowerCase();
+                        return t === 'enviar mensaje' || t === 'mensaje' || t === 'message' || href.includes('/messaging/compose');
+                    });
+                    
+                    // 2. Detectar distintivo de grado de red (1er, 1.º, 1º, 1st) en cualquier etiqueta (p, span, div, li)
+                    const is1st = Array.from(document.querySelectorAll('span, p, div, li')).some(el => {
+                        const t = (el.innerText || '').trim();
+                        return /^[·•\\s]*(?:1er|1º|1°|1\\.?º|1st)[·•\\s]*$/i.test(t) || t === '· 1er' || t === '1.º' || t === '1º';
+                    });
+                    
+                    // 3. Comprobar si aún figura como pendiente de aceptación
+                    const isPending = interactiveEls.some(el => (el.innerText || '').toLowerCase().trim() === 'pendiente');
+                    
+                    const connected = (hasMsgAction || is1st) && !isPending;
+                    return { is_connected: connected, has_msg_action: hasMsgAction, is_1st: is1st, is_pending: isPending };
+                })()
+                """
+                eval_conn = browser_service._call_mcp_evaluate(check_conn_js)
+                if isinstance(eval_conn, dict) and eval_conn.get("is_connected"):
+                    is_connected = True
+                    current_status = "CONECTADO"
+                    with get_db() as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("UPDATE leads SET estado = 'CONECTADO', fecha_conexion = ?, grado_red = '1º', updated_at = ? WHERE id = ?", (now_iso, now_iso, lead_id))
+                        cursor.execute("""
+                            INSERT INTO historial_actividades (lead_id, tipo_evento, descripcion, timestamp)
+                            VALUES (?, 'CONEXION_ACEPTADA', ?, ?)
+                        """, (lead_id, "Conexión aceptada confirmada en vivo durante paso de verificación de secuencia.", now_iso))
+
+                    # Disparar resolución / extracción de correo de 1er grado automáticamente
+                    try:
+                        import email_resolver_service
+                        threading.Thread(target=email_resolver_service.resolve_lead_email, args=(lead_id,), daemon=True).start()
+                    except Exception:
+                        pass
+            except Exception as e:
+                print(f"[SequenceEngine] Error en verificación en vivo de conexión: {e}")
+
         execution_result["bifurcacion"] = "SI_ACEPTO" if is_connected else "SI_NO_ACEPTO"
-        execution_result["detalle"] = f"Evaluación de bifurcación: {execution_result['bifurcacion']} (Estado actual: {current_status})"
+        execution_result["detalle"] = f"Evaluación de bifurcación: {execution_result['bifurcacion']} (Estado verificado: {current_status})"
 
     # =========================================================================
     # ACTION 5: ENVIAR_MENSAJE_LINKEDIN
@@ -819,7 +1036,76 @@ def _process_step_atom(item: Dict[str, Any]) -> Dict[str, Any]:
             execution_result["detalle"] = f"Correo formal de Google Workspace enviado a {email_dest}."
 
     # =========================================================================
-    # ACTION 7: RETIRAR_INVITACION
+    # ACTION 7: ENVIAR_WHATSAPP_WEB (WhatsApp Web Local con Antiban Humanizado)
+    # =========================================================================
+    elif action_type == "ENVIAR_WHATSAPP_WEB":
+        # 1. Validación de seguridad y cuotas de WhatsApp Web
+        wa_safety = whatsapp_safety_engine.check_whatsapp_safety()
+        if not wa_safety.get("safe"):
+            execution_result["ok"] = False
+            execution_result["detalle"] = f"WhatsApp bloqueado por seguridad: {wa_safety.get('reason')}"
+            return execution_result
+
+        phone_dest = item.get("telefono")
+        normalized_phone = whatsapp_safety_engine.normalize_phone_number(phone_dest)
+        if not normalized_phone:
+            execution_result["ok"] = False
+            execution_result["detalle"] = f"Lead {lead_name} no tiene número de teléfono válido para WhatsApp (formato E.164 requerido)."
+        else:
+            clean_digits = normalized_phone.lstrip("+")
+            template = params.get("plantilla_mensaje") or params.get("mensaje") or "Hola {nombre}, un gusto saludarte. Te contacto en relación a tu labor en {empresa}."
+            company = item.get("institucion_actual") or "tu empresa"
+            title = item.get("cargo_actual") or item.get("cargo_titular") or "tu cargo"
+            first_name = lead_name.split()[0] if lead_name else "hola"
+
+            msg = template
+            for k in ["{nombre}", "{{nombre}}"]: msg = msg.replace(k, first_name)
+            for k in ["{nombre_completo}", "{{nombre_completo}}"]: msg = msg.replace(k, lead_name)
+            for k in ["{empresa}", "{{empresa}}", "{institucion}", "{{institucion}}", "{colegio}", "{{colegio}}"]: msg = msg.replace(k, company)
+            for k in ["{cargo}", "{{cargo}}"]: msg = msg.replace(k, title)
+
+            msg_final = safety_engine.process_spintax(msg)
+
+            # 2. Protección de enlaces en primer contacto
+            is_valid_links, link_reason = whatsapp_safety_engine.validate_message_links(msg_final, is_first_contact=True)
+            if not is_valid_links:
+                execution_result["ok"] = False
+                execution_result["detalle"] = f"Envío cancelado: {link_reason}"
+                return execution_result
+
+            # 3. Apertura limpia sin query params directos de texto para no alertar a Meta
+            wa_url = f"https://web.whatsapp.com/send?phone={clean_digits}"
+
+            try:
+                browser_service.open_profile_in_browseros(wa_url, f"WhatsApp Web - {lead_name}")
+                # Pausa de observación visual humana
+                time.sleep(random.uniform(4.5, 7.5))
+
+                # 4. Mecanografía biométrica humana asistida por script
+                type_script = whatsapp_safety_engine.get_biometric_typing_script(
+                    selector='footer div[contenteditable="true"]',
+                    message=msg_final
+                )
+                send_eval = browser_service._call_mcp_evaluate(type_script, channel="whatsapp")
+            except Exception as e:
+                send_eval = {"ok": False, "error": str(e)}
+
+            with get_db() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO mensajes_whatsapp (lead_id, campana_nombre, telefono_destino, contenido, estado, enviado_at, created_at)
+                    VALUES (?, ?, ?, ?, 'ENVIADO', ?, ?)
+                """, (lead_id, item.get("secuencia_nombre", "Secuencia Multicanal"), clean_digits, msg_final, now_iso, now_iso))
+                cursor.execute("""
+                    INSERT INTO historial_actividades (lead_id, tipo_evento, descripcion, timestamp)
+                    VALUES (?, 'WHATSAPP_WEB_ENVIADO', ?, ?)
+                """, (lead_id, f"Mensaje WhatsApp Web despachado a +{clean_digits} con mecanografía biométrica: '{msg_final[:60]}...'", now_iso))
+                cursor.execute("UPDATE leads SET estado = 'MENSAJE_ENVIADO', updated_at = ? WHERE id = ?", (now_iso, lead_id))
+
+            execution_result["detalle"] = f"Mensaje WhatsApp Web despachado a +{clean_digits} con cadencia biométrica."
+
+    # =========================================================================
+    # ACTION 8: RETIRAR_INVITACION
     # =========================================================================
     elif action_type == "RETIRAR_INVITACION":
         with get_db() as conn:
@@ -830,6 +1116,48 @@ def _process_step_atom(item: Dict[str, Any]) -> Dict[str, Any]:
                 VALUES (?, 'INVITACION_RETIRADA_SECUENCIA', 'Invitación retirada automáticamente tras vencimiento de plazo en secuencia.', ?)
             """, (lead_id, now_iso))
         execution_result["detalle"] = "Invitación pendiente de LinkedIn retirada exitosamente."
+
+    # =========================================================================
+    # ACTION 9: EXTRAER_CORREO / RESOLVER_CORREO (Enriquecimiento en Cascada)
+    # =========================================================================
+    elif action_type in ("EXTRAER_CORREO", "RESOLVER_CORREO"):
+        import email_resolver_service
+        force = bool(params.get("forzar_recarga", False))
+        res_email = email_resolver_service.resolve_lead_email(lead_id, force_refresh=force)
+        if res_email.get("ok") and res_email.get("email"):
+            execution_result["detalle"] = f"Correo resuelto exitosamente ({res_email.get('source')}): {res_email.get('email')} [{res_email.get('status')}]."
+        else:
+            execution_result["detalle"] = f"Resolución de correo completada: {res_email.get('motivo', 'No se validó correo corporativo')}."
+
+    # =========================================================================
+    # ACTION 10: CRUZAR_ZOHO_CRM / SINCRONIZAR_ZOHO (Inteligencia B2B vía Sesión)
+    # =========================================================================
+    elif action_type in ("CRUZAR_ZOHO_CRM", "SINCRONIZAR_ZOHO"):
+        sync_res = zoho_browser_service.sync_lead_with_zoho(lead_id)
+        if sync_res.get("ok"):
+            if sync_res.get("matched"):
+                ent_type = sync_res.get("entity_type")
+                z_email = sync_res.get("email_zoho")
+                is_client = sync_res.get("account_is_client")
+                acc_name = sync_res.get("account_name")
+                if is_client:
+                    with get_db() as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            UPDATE leads SET estado = 'CLIENTE_EXISTENTE', updated_at = ? WHERE id = ?
+                        """, (now_iso, lead_id))
+                        cursor.execute("""
+                            INSERT INTO historial_actividades (lead_id, tipo_evento, descripcion, timestamp)
+                            VALUES (?, 'ANTI_COLISION_ACTIVADO', ?, ?)
+                        """, (lead_id, f"Colisión evitada: La institución '{acc_name}' es cliente activo en Zoho CRM. Prospección fría finalizada.", now_iso))
+                    execution_result["detalle"] = f"Cruce Zoho: {ent_type} hallado. Cuenta '{acc_name}' es Cliente Activo. Prospección detenida por anti-colisión."
+                else:
+                    execution_result["detalle"] = f"Cruce Zoho exitoso: {ent_type} ID {sync_res.get('zoho_id')}, Email extraído: {z_email or 'N/A'}, Cuenta: {acc_name or 'N/A'}."
+            else:
+                execution_result["detalle"] = f"Cruce Zoho: No se encontraron coincidencias para '{lead_name}' en Zoho CRM."
+        else:
+            execution_result["ok"] = False
+            execution_result["detalle"] = f"Error al sincronizar con Zoho CRM: {sync_res.get('error')}"
 
     # =========================================================================
     # ADVANCE DECISION TREE TO NEXT STEP
@@ -882,9 +1210,7 @@ def _process_step_atom(item: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 def _calculate_next_step(sequence_id: str, current_step_id: str, bifurcation: Optional[str], now: datetime) -> tuple:
-    """
-    Traverses tree branches to identify correct child step.
-    """
+    """Recorre las ramas del árbol de decisión para identificar el siguiente paso hijo correspondiente."""
     with get_db() as conn:
         cursor = conn.cursor()
         
@@ -935,34 +1261,100 @@ def _calculate_next_step(sequence_id: str, current_step_id: str, bifurcation: Op
             hours_jitter = round(max(0.1, hours * random.uniform(0.95, 1.05)), 2)
             next_date = (now + timedelta(hours=hours_jitter)).isoformat()
         else:
-            # Stochastic human pause (3 to 6 mins)
-            pause_seconds = safety_engine.calculate_gaussian_delay()
-            next_date = (now + timedelta(seconds=pause_seconds)).isoformat()
+            # Si el paso actual de origen ya era ESPERAR, la pausa estratégica ya transcurrió
+            # y el prospecto queda listo para ser despachado de inmediato.
+            cursor.execute("SELECT tipo_accion FROM pasos_secuencia WHERE id = ?", (current_step_id,))
+            curr_step_row = cursor.fetchone()
+            curr_step_type = curr_step_row["tipo_accion"] if curr_step_row else ""
+            if curr_step_type == "ESPERAR":
+                next_date = now.isoformat()
+            else:
+                # Pausa estocástica humana (3 a 6 mins) entre pasos de acción inmediata
+                pause_seconds = safety_engine.calculate_gaussian_delay()
+                next_date = (now + timedelta(seconds=pause_seconds)).isoformat()
 
         return child_id, next_date, False
 
-# ==============================================================================
-# BACKWARD COMPATIBILITY ALIASES (LEGACY SPANISH SUPPORT)
-# ==============================================================================
-obtener_secuencias = get_sequences
-cambiar_estado_publicacion_secuencia = change_sequence_publish_status
-obtener_secuencia_completa = get_full_sequence
-crear_secuencia = create_sequence
-actualizar_secuencia = update_sequence
-eliminar_secuencia = delete_sequence
-agregar_paso_secuencia = add_sequence_step
-eliminar_paso_secuencia = delete_sequence_step
-guardar_pasos_secuencia = save_sequence_steps
-asignar_leads_a_secuencia = assign_leads_to_sequence
-obtener_leads_en_secuencia = get_leads_in_sequence
-obtener_siguiente_lead_ejecutable = get_next_executable_lead
-ejecutar_siguiente_paso = execute_next_step
-_procesar_paso_atomo = _process_step_atom
-_calcular_siguiente_paso = _calculate_next_step
+def promote_expired_delays(sequence_id: Optional[str] = None, tenant_id: Optional[str] = None) -> int:
+    """
+    Identifica y promueve automáticamente todos los prospectos en pasos 'ESPERAR'
+    cuyo temporizador ya expiró (proxima_ejecucion_at <= AHORA), avanzándolos de
+    inmediato al siguiente paso de la secuencia en la base de datos.
 
-# Standard English Aliases
-get_sequence_detail = get_full_sequence
-change_sequence_status = change_sequence_publish_status
-get_sequence_leads = get_leads_in_sequence
+    Args:
+        sequence_id (Optional[str]): Filtrar por una secuencia específica o None.
+        tenant_id (Optional[str]): Filtrar por tenant específico o None.
+
+    Returns:
+        int: Cantidad de prospectos promovidos exitosamente.
+    """
+    now = datetime.now()
+    now_iso = now.isoformat()
+    promoted_count = 0
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        where_clauses = [
+            "ls.estado = 'EN_CURSO'",
+            "p.tipo_accion = 'ESPERAR'",
+            "(ls.proxima_ejecucion_at IS NULL OR ls.proxima_ejecucion_at <= ?)"
+        ]
+        params = [now_iso]
+
+        if sequence_id:
+            where_clauses.append("ls.secuencia_id = ?")
+            params.append(sequence_id)
+        if tenant_id:
+            where_clauses.append("s.tenant_id = ?")
+            params.append(tenant_id)
+
+        where_sql = " AND ".join(where_clauses)
+
+        cursor.execute(f"""
+            SELECT ls.id as inscripcion_id, ls.lead_id, ls.secuencia_id, ls.paso_actual_id
+            FROM leads_en_secuencia ls
+            JOIN pasos_secuencia p ON ls.paso_actual_id = p.id
+            JOIN secuencias s ON ls.secuencia_id = s.id
+            WHERE {where_sql}
+        """, params)
+
+        expired_leads = cursor.fetchall()
+        if not expired_leads:
+            return 0
+
+        for row in expired_leads:
+            lead_id = row["lead_id"]
+            sec_id = row["secuencia_id"]
+            current_step_id = row["paso_actual_id"]
+
+            next_step_id, next_date_iso, is_sequence_end = _calculate_next_step(
+                sequence_id=sec_id,
+                current_step_id=current_step_id,
+                bifurcation=None,
+                now=now
+            )
+
+            if is_sequence_end or not next_step_id:
+                cursor.execute("""
+                    UPDATE leads_en_secuencia
+                    SET estado = 'COMPLETADO', proxima_ejecucion_at = NULL, updated_at = ?
+                    WHERE lead_id = ? AND secuencia_id = ?
+                """, (now_iso, lead_id, sec_id))
+            else:
+                cursor.execute("""
+                    UPDATE leads_en_secuencia
+                    SET paso_actual_id = ?, proxima_ejecucion_at = ?, updated_at = ?
+                    WHERE lead_id = ? AND secuencia_id = ?
+                """, (next_step_id, next_date_iso, now_iso, lead_id, sec_id))
+
+            promoted_count += 1
+
+        conn.commit()
+
+    return promoted_count
+
+
+
 
 

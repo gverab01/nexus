@@ -5,7 +5,12 @@ const http = require('http');
 const workerRunner = require('./worker_runner.cjs');
 
 const { isUrlAllowed, isSubresourceAllowed, isSilentlyBlocked } = require('./security/domain_guard.cjs');
-const { handleLinkedInExtractNetwork, handleLinkedInEnrichProfile } = require('./security/action_handlers.cjs');
+const { 
+  handleLinkedInExtractNetwork, 
+  handleLinkedInEnrichProfile,
+  handleLinkedInReadContactInfo,
+  handleLinkedInSearchPeople
+} = require('./security/action_handlers.cjs');
 
 let mainWindow = null;
 let linkedInWindow = null;
@@ -820,6 +825,13 @@ function startInternalServer() {
         if (urlPath === '/extract/contact-info' && req.method === 'POST') {
           const win = getOrCreateLinkedInWindow(false);
           const result = await handleLinkedInReadContactInfo(win, parsed);
+          return sendJson(200, result);
+        }
+
+        // 11. Búsqueda y Extracción Precompilada Segura de Personas en LinkedIn
+        if (urlPath === '/extract/search' && req.method === 'POST') {
+          const win = getOrCreateLinkedInWindow(false);
+          const result = await handleLinkedInSearchPeople(win, parsed);
           return sendJson(200, result);
         }
 

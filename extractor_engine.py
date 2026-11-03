@@ -360,25 +360,23 @@ def search_and_extract_leads(term: str, page: int = 1, auto_save: bool = True, l
     )
 
     if is_electron:
-        browser_service.open_url(target_url, force=True)
-        # Scroll suave para asegurar hidratación de los componentes de LinkedIn
-        browser_service._call_mcp_evaluate("""
-            (() => {
-                window.scrollBy({ top: 350, behavior: 'smooth' });
-                return true;
-            })()
-        """)
-        time.sleep(3.5)
-
         logger_service.log_event(
             "INFO",
             "EXTRACTOR",
-            f"Evaluando elementos de la página en Chromium Embebido (Electron)...",
-            {"url": target_url}
+            f"Ejecutando búsqueda y extracción precompilada en Electron para '{term}' (Página {page})...",
+            {"termino": term, "pagina": page, "url": target_url}
         )
-        eval_result = browser_service._call_mcp_evaluate(EXTRACTION_SCRIPT_JS)
-        if isinstance(eval_result, dict) and "result" in eval_result:
-            eval_result = eval_result["result"]
+        electron_res = browser_service.search_people_from_electron(term, page=page)
+        if electron_res.get("success"):
+            extracted_leads = electron_res.get("leads", [])
+        else:
+            logger_service.log_event(
+                "WARNING",
+                "EXTRACTOR",
+                f"Aviso en búsqueda precompilada de Electron: {electron_res.get('error')}",
+                {"error": electron_res.get("error")}
+            )
+            extracted_leads = []
     else:
         page_id = _get_or_create_search_tab(target_url)
         time.sleep(3.0)
@@ -389,8 +387,7 @@ def search_and_extract_leads(term: str, page: int = 1, auto_save: bool = True, l
             {"page_id": page_id}
         )
         eval_result = _call_mcp_evaluate(page_id, EXTRACTION_SCRIPT_JS)
-
-    extracted_leads = eval_result.get("leads", []) if isinstance(eval_result, dict) else []
+        extracted_leads = eval_result.get("leads", []) if isinstance(eval_result, dict) else []
 
     if not extracted_leads:
         logger_service.log_event(

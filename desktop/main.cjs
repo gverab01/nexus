@@ -940,6 +940,10 @@ function startInternalServer() {
     });
   });
 
+  server.on('error', (err) => {
+    console.error(`[Electron Core] Error en servidor interno port ${INTERNAL_PORT}:`, err.message);
+  });
+
   server.listen(INTERNAL_PORT, '127.0.0.1', () => {
     console.log(`[Electron Core] Servidor interno de Chromium aislado activo en http://127.0.0.1:${INTERNAL_PORT}`);
   });
@@ -1007,44 +1011,58 @@ function setupIpcHandlers() {
   });
 }
 
-// Inicialización de Electron
-app.whenReady().then(() => {
-  setupSessionGuardsAndListeners();
-  setupIpcHandlers();
-  createMainWindow();
+// Garantizar instancia única: si ya hay una corriendo, enfocamos la existente y salimos
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
 
-  // Proveedor seguro de sesión desde el proceso principal (solo lee el token de mainWindow si está en el origen local de la app)
-  workerRunner.setSessionProvider(async () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return null;
-    try {
-      const currentUrl = mainWindow.webContents.getURL() || '';
-      const isAllowedOrigin = currentUrl.startsWith('file://') ||
-                              currentUrl.startsWith('http://127.0.0.1:8000') ||
-                              currentUrl.startsWith('http://localhost:8000') ||
-                              currentUrl.startsWith('http://localhost:5173');
-      if (!isAllowedOrigin) {
+  // Inicialización de Electron
+  app.whenReady().then(() => {
+    setupSessionGuardsAndListeners();
+    setupIpcHandlers();
+    createMainWindow();
+
+    // Proveedor seguro de sesión desde el proceso principal (solo lee el token de mainWindow si está en el origen local de la app)
+    workerRunner.setSessionProvider(async () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return null;
+      try {
+        const currentUrl = mainWindow.webContents.getURL() || '';
+        const isAllowedOrigin = currentUrl.startsWith('file://') ||
+                                currentUrl.startsWith('http://127.0.0.1:8000') ||
+                                currentUrl.startsWith('http://localhost:8000') ||
+                                currentUrl.startsWith('http://localhost:5173');
+        if (!isAllowedOrigin) {
+          return null;
+        }
+        const tok = await mainWindow.webContents.executeJavaScript(
+          `window.sessionStorage ? window.sessionStorage.getItem('nexus_session_token') : null`
+        );
+        return tok ? { sessionToken: tok } : null;
+      } catch (e) {
         return null;
       }
-      const tok = await mainWindow.webContents.executeJavaScript(
-        `window.sessionStorage ? window.sessionStorage.getItem('nexus_session_token') : null`
-      );
-      return tok ? { sessionToken: tok } : null;
-    } catch (e) {
-      return null;
-    }
+    });
+
+    startInternalServer();
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createMainWindow();
+      }
+    });
   });
 
-  startInternalServer();
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createMainWindow();
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') {
+      app.quit();
     }
   });
-});
-
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
-});
+}

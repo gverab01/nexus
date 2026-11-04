@@ -452,7 +452,8 @@ function createMainWindow() {
     autoHideMenuBar: true,
     webPreferences: {
       nodeIntegration: false,
-      contextIsolation: true
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.cjs')
     }
   });
 
@@ -847,9 +848,72 @@ function startInternalServer() {
   });
 }
 
+/**
+ * Registra los manejadores IPC seguros para comunicación con React (vía preload.cjs).
+ * Fase 2 / Tarea 1: Desacopla la sesión del worker de la URL de navegación.
+ */
+function setupIpcHandlers() {
+  // 1. Obtener la URL base del backend centralizado
+  ipcMain.handle('nexus:get-api-url', () => {
+    return process.env.API_BASE_URL || process.env.APP_URL || 'http://127.0.0.1:8000';
+  });
+
+  // 2. Establecer sesión autenticada desde React (Login)
+  ipcMain.handle('nexus:set-auth-session', async (_event, sessionData) => {
+    if (!sessionData || typeof sessionData !== 'object') {
+      return { ok: false, error: 'Datos de sesión inválidos' };
+    }
+    const token = typeof sessionData.sessionToken === 'string' ? sessionData.sessionToken.trim() : null;
+    const tenantId = typeof sessionData.tenantId === 'string' ? sessionData.tenantId.trim() : null;
+
+    if (!token) {
+      return { ok: false, error: 'Token de sesión vacío' };
+    }
+
+    workerRunner.setAuthSession({ sessionToken: token, tenantId });
+    console.log(`[Electron IPC] Sesión sincronizada con worker local (Tenant: ${tenantId || 'auto'}).`);
+    return { ok: true };
+  });
+
+  // 3. Limpiar sesión al hacer logout en React
+  ipcMain.handle('nexus:clear-auth-session', async () => {
+    workerRunner.clearAuthSession('Sesión cerrada por el usuario en la interfaz.');
+    console.log('[Electron IPC] Sesión de worker invalidada tras logout.');
+    return { ok: true };
+  });
+
+  // 4. Consultar estado resumido de autenticación del worker (sin exponer el token en claro)
+  ipcMain.handle('nexus:get-auth-session', async () => {
+    const status = workerRunner.getStatus();
+    return {
+      authenticated: !status.requiere_autenticacion && !status.error_autorizacion,
+      tenantId: status.tenant_id,
+      fase: status.fase
+    };
+  });
+
+  // 5. Estado detallado del worker local
+  ipcMain.handle('nexus:get-worker-status', async () => {
+    return workerRunner.getStatus();
+  });
+
+  // 6. Iniciar worker desde la interfaz
+  ipcMain.handle('nexus:start-worker', async (_event, opts = {}) => {
+    workerRunner.startWorker(getOrCreateLinkedInWindow, (opts.sessionToken || opts.tenantId) ? opts : null);
+    return workerRunner.getStatus();
+  });
+
+  // 7. Detener worker desde la interfaz
+  ipcMain.handle('nexus:stop-worker', async () => {
+    workerRunner.stopWorker();
+    return workerRunner.getStatus();
+  });
+}
+
 // Inicialización de Electron
 app.whenReady().then(() => {
   setupSessionGuardsAndListeners();
+  setupIpcHandlers();
   createMainWindow();
 
   // Proveedor seguro de sesión desde el proceso principal (solo lee el token de mainWindow si está en el origen local de la app)

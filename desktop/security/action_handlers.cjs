@@ -838,7 +838,15 @@ async function handleLinkedInReadContactInfo(win, params) {
     win.loadURL(cleanUrl).catch(resolve);
   });
 
-  await sleep(3500);
+  await sleep(2500);
+
+  if (win.webContents.isLoading()) {
+    await new Promise((resolve) => {
+      win.webContents.once('did-stop-loading', resolve);
+      setTimeout(resolve, 8000);
+    });
+    await sleep(1500);
+  }
 
   const contactData = await win.webContents.executeJavaScript(`
     (() => {
@@ -931,6 +939,15 @@ async function handleLinkedInEnrichProfile(win, params = {}) {
       win.loadURL(cleanUrl).catch(resolve);
     });
     await sleep(2500);
+  }
+
+  // Asegurar que la página no esté en proceso de carga o redirección antes de inspeccionar
+  if (win.webContents.isLoading()) {
+    await new Promise((resolve) => {
+      win.webContents.once('did-stop-loading', resolve);
+      setTimeout(resolve, 8000);
+    });
+    await sleep(1500);
   }
 
   const finalUrl = win.webContents.getURL() || '';

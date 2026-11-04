@@ -176,11 +176,15 @@ function setupSessionGuardsAndListeners() {
     callback({ cancel: false });
   });
 
-  // Flexibilizar cabeceras CSP de respuesta para permitir automatización segura del DOM
+  // Flexibilizar cabeceras CSP de respuesta de forma insensible a mayúsculas/minúsculas para permitir automatización segura del DOM
   liSession.webRequest.onHeadersReceived((details, callback) => {
     const responseHeaders = { ...details.responseHeaders };
-    delete responseHeaders['content-security-policy'];
-    delete responseHeaders['content-security-policy-report-only'];
+    for (const key of Object.keys(responseHeaders)) {
+      const lower = key.toLowerCase();
+      if (lower.includes('content-security-policy') || lower === 'x-frame-options') {
+        delete responseHeaders[key];
+      }
+    }
     callback({ responseHeaders });
   });
 
@@ -271,7 +275,13 @@ function getOrCreateLinkedInWindow(shouldShow = false) {
       contextIsolation: false,
       nodeIntegration: false,
       sandbox: false,
-      webSecurity: true
+      webSecurity: false
+    }
+  });
+
+  linkedInWindow.webContents.on('console-message', (_event, level, message, line) => {
+    if (level >= 2) {
+      console.warn(`[LinkedIn Console] [L${level}] ${message} (línea ${line})`);
     }
   });
 

@@ -25,6 +25,9 @@ app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
 app.commandLine.appendSwitch('excludeSwitches', 'enable-automation');
 app.commandLine.appendSwitch('log-level', '3'); // Silencia advertencias internas no críticas de Chromium
 app.commandLine.appendSwitch('ignore-certificate-errors'); // Evita errores SSL net_error -101 en sockets/telemetría interna
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
 
 const STEALTH_INJECTION_SCRIPT = `
   (() => {
@@ -275,7 +278,8 @@ function getOrCreateLinkedInWindow(shouldShow = false) {
       contextIsolation: false,
       nodeIntegration: false,
       sandbox: false,
-      webSecurity: false
+      webSecurity: false,
+      backgroundThrottling: false
     }
   });
 
@@ -332,7 +336,8 @@ function getOrCreateWhatsAppWindow(shouldShow = false) {
       contextIsolation: false,
       nodeIntegration: false,
       sandbox: false,
-      webSecurity: true
+      webSecurity: true,
+      backgroundThrottling: false
     }
   });
 
@@ -396,7 +401,8 @@ function getOrCreateZohoWindow(shouldShow = false) {
       contextIsolation: false,
       nodeIntegration: false,
       sandbox: false,
-      webSecurity: true
+      webSecurity: true,
+      backgroundThrottling: false
     }
   });
 

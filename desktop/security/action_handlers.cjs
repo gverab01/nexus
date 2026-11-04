@@ -23,7 +23,11 @@ async function safeExecuteInIsolatedWorld(win, scriptCode) {
   const fs = require('fs');
   const os = require('os');
   const path = require('path');
-  const logFile = path.join(os.homedir(), 'AppData', 'Roaming', 'NexusReach Pro', 'exec_debug.log');
+  const logDir = path.join(os.homedir(), 'AppData', 'Roaming', 'nexusreach-desktop');
+  if (!fs.existsSync(logDir)) {
+    try { fs.mkdirSync(logDir, { recursive: true }); } catch (_) {}
+  }
+  const logFile = path.join(logDir, 'exec_debug.log');
 
   let isolatedErr = null;
   if (win && win.webContents && typeof win.webContents.executeJavaScriptInIsolatedWorld === 'function') {
@@ -1004,19 +1008,11 @@ async function handleLinkedInEnrichProfile(win, params = {}) {
 
   // Desplazamiento progresivo orgánico para activar lazy loading de Experiencia en SDUI
   await safeExecuteInIsolatedWorld(win, `
-    (async () => {
+    (() => {
       try {
         const ws = document.getElementById('workspace') || document.querySelector('main');
-        window.scrollTo({ top: 1200, behavior: 'smooth' });
-        if (ws) ws.scrollTop = 1200;
-        await new Promise(r => setTimeout(r, 600));
-
-        window.scrollTo({ top: 2600, behavior: 'smooth' });
-        if (ws) ws.scrollTop = 2600;
-        await new Promise(r => setTimeout(r, 600));
-
-        window.scrollTo({ top: 4000, behavior: 'smooth' });
-        if (ws) ws.scrollTop = 4000;
+        window.scrollTo({ top: 800, behavior: 'auto' });
+        if (ws) ws.scrollTop = 800;
 
         const sections = Array.from(document.querySelectorAll('section'));
         for (const s of sections) {

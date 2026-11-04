@@ -1051,7 +1051,9 @@ def sync_lead_with_linkedin(
         import extractor_engine
         enriched = extractor_engine.enrich_lead_from_live_profile(url)
         if not enriched.get("ok"):
-            raise HTTPException(status_code=500, detail=enriched.get("error", "Error sincronizando con LinkedIn"))
+            err_msg = enriched.get("error", "Error sincronizando con LinkedIn")
+            status = 400 if any(k in err_msg.lower() for k in ["sesión", "no iniciada", "no permitida", "404", "parámetro"]) else 500
+            raise HTTPException(status_code=status, detail=err_msg)
 
         now_iso = datetime.now().isoformat()
         nuevo_nombre = enriched.get("nombre")

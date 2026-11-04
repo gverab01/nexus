@@ -175,6 +175,15 @@ function setupSessionGuardsAndListeners() {
     }
     callback({ cancel: false });
   });
+
+  // Flexibilizar cabeceras CSP de respuesta para permitir automatización segura del DOM
+  liSession.webRequest.onHeadersReceived((details, callback) => {
+    const responseHeaders = { ...details.responseHeaders };
+    delete responseHeaders['content-security-policy'];
+    delete responseHeaders['content-security-policy-report-only'];
+    callback({ responseHeaders });
+  });
+
   liSession.cookies.on('changed', (event, cookie, cause, removed) => {
     if (cookie.name === 'li_at' && !removed) {
       console.log('[Electron Sesion] ¡Cookie de autenticación li_at guardada! Sesión de LinkedIn activa.');

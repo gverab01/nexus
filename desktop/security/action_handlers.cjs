@@ -812,6 +812,19 @@ async function handleLinkedInReadContactInfo(win, params) {
     return { success: false, error: 'profile_url requerido' };
   }
 
+  // Pre-verificación de sesión activa de LinkedIn
+  try {
+    const cookies = await win.webContents.session.cookies.get({ domain: '.linkedin.com' });
+    const hasLiAt = cookies.some((c) => c.name === 'li_at');
+    if (!hasLiAt) {
+      return {
+        success: false,
+        ok: false,
+        error: 'Sesión de LinkedIn no iniciada en la aplicación. Por favor, abre LinkedIn en la barra lateral e inicia sesión para consultar datos de contacto.'
+      };
+    }
+  } catch (err) {}
+
   const cleanUrl = profileUrl.split('?')[0].replace(/\/+$/, '') + '/overlay/contact-info/';
   const check = isUrlAllowed(cleanUrl, false);
   if (!check.allowed) return { success: false, error: check.reason };
@@ -887,6 +900,19 @@ async function handleLinkedInEnrichProfile(win, params = {}) {
     return { success: false, ok: false, error: 'Parámetro profile_url requerido' };
   }
 
+  // Pre-verificación de sesión activa de LinkedIn
+  try {
+    const cookies = await win.webContents.session.cookies.get({ domain: '.linkedin.com' });
+    const hasLiAt = cookies.some((c) => c.name === 'li_at');
+    if (!hasLiAt) {
+      return {
+        success: false,
+        ok: false,
+        error: 'Sesión de LinkedIn no iniciada en la aplicación. Por favor, abre LinkedIn en la barra lateral e inicia sesión para sincronizar contactos.'
+      };
+    }
+  } catch (err) {}
+
   const cleanUrl = profileUrl.split('?')[0].replace(/\/+$/, '') + '/';
   const check = isUrlAllowed(cleanUrl, false);
   if (!check.allowed || check.channel !== 'linkedin') {
@@ -947,7 +973,7 @@ async function handleLinkedInEnrichProfile(win, params = {}) {
         return false;
       }
     })()
-  `).catch(() => {});
+  `, true).catch(() => {});
 
   await sleep(1500);
 
@@ -1329,7 +1355,7 @@ async function handleLinkedInEnrichProfile(win, params = {}) {
         return { ok: false, error: e.message };
       }
     })()
-  `).catch(err => ({ ok: false, error: err.message }));
+  `, true).catch(err => ({ ok: false, error: 'No se pudo leer el contenido del perfil en LinkedIn: ' + (err.message || 'Error en script de extracción') }));
 
   // Fallback si falta cargo o empresa: consultar /details/experience/
   let firstEntry = null;

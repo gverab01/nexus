@@ -115,7 +115,9 @@ async function request(endpoint, options = {}) {
     }
     return await response.json();
   } catch (error) {
-    console.error(`[API Error] en ${endpoint}:`, error);
+    if (!options?.silent) {
+      console.error(`[API Error] en ${endpoint}:`, error);
+    }
     throw error;
   }
 }
@@ -890,9 +892,9 @@ export async function fetchLogs(params = {}) {
   return await request(`/logs${query}`);
 }
 
-export async function fetchLogStats() {
+export async function fetchLogStats(options = {}) {
   // Obtiene métricas agregadas de actividad reciente y estado del extractor
-  return await request('/logs/stats');
+  return await request('/logs/stats', options);
 }
 
 export async function clearLogs() {

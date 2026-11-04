@@ -109,10 +109,13 @@ export default function App() {
     }
   }, [currentUser]);
 
-  // La consola Super Admin no utiliza logs de prospección
+  // Control de acceso a la vista de auditoría de actividad (solo roles administrativos en workspace)
   useEffect(() => {
+    const isAdmin = Boolean(currentUser && ['SUPER_ADMIN', 'AGENCY_ADMIN', 'COMPANY_ADMIN'].includes(currentUser.rol));
     if (currentUser?.rol === 'SUPER_ADMIN' && activeTab === 'logs') {
       setActiveTab('super_admin');
+    } else if (currentUser && !isAdmin && activeTab === 'logs') {
+      setActiveTab('prospectos');
     }
   }, [currentUser, activeTab]);
 
@@ -198,18 +201,19 @@ export default function App() {
 
   async function refreshCounters() {
     try {
+      const isAdmin = Boolean(currentUser && ['SUPER_ADMIN', 'AGENCY_ADMIN', 'COMPANY_ADMIN'].includes(currentUser.rol));
       const [lists, seqs, logStats, leadsData] = await Promise.all([
         fetchLeadLists(selectedWorkspaceTenantId).catch(() => []),
         fetchSequences(selectedWorkspaceTenantId).catch(() => []),
-        fetchLogStats().catch(() => ({})),
+        isAdmin ? fetchLogStats({ silent: true }).catch(() => ({})) : Promise.resolve({ total_logs: 0, is_extracting_now: false }),
         fetchProspects({ limit: 1, tenantId: selectedWorkspaceTenantId }).catch(() => ({ total: 0 })),
       ]);
 
       setListsCount(lists.length);
       setSequencesCount(seqs.length);
-      setLogsCount(logStats.total_logs || 0);
+      setLogsCount(logStats?.total_logs || 0);
       setTotalLeadsCount(leadsData?.total || 0);
-      setIsExtracting(Boolean(logStats.is_extracting_now));
+      setIsExtracting(Boolean(logStats?.is_extracting_now));
     } catch (err) {
       console.error('Error actualizando contadores:', err);
     }
@@ -468,7 +472,7 @@ export default function App() {
             <AntibanSettingsView />
           )}
 
-          {activeTab === 'logs' && (
+          {activeTab === 'logs' && ['SUPER_ADMIN', 'AGENCY_ADMIN', 'COMPANY_ADMIN'].includes(currentUser?.rol) && (
             <ActivityLogsView onStatusChange={handleLogStatusChange} />
           )}
         </main>

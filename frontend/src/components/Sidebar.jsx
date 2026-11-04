@@ -55,6 +55,8 @@ export default function Sidebar({
 }) {
   const isSuperAdmin = currentUser?.rol === 'SUPER_ADMIN';
   const isAgencyAdmin = currentUser?.rol === 'AGENCY_ADMIN';
+  const isCompanyAdmin = currentUser?.rol === 'COMPANY_ADMIN';
+  const isAdmin = isSuperAdmin || isAgencyAdmin || isCompanyAdmin;
   const isInTenantWorkspace = Boolean(selectedWorkspaceTenantId);
   const showProspectingControls = !(isSuperAdmin && !isInTenantWorkspace);
 
@@ -91,7 +93,7 @@ export default function Sidebar({
 
     const systemItems = [
       { id: 'antiban', label: 'Seguridad', icon: ShieldCheck, badge: allAntibanActive ? 'ok' : 'alerta' },
-      { id: 'logs', label: 'Actividad', icon: Terminal, badge: isExtracting ? 'vivo' : logsCount || null },
+      ...(isAdmin ? [{ id: 'logs', label: 'Actividad', icon: Terminal, badge: isExtracting ? 'vivo' : logsCount || null }] : []),
     ];
 
     if (isAgencyAdmin && !isInTenantWorkspace) {

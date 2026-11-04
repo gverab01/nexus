@@ -50,3 +50,4 @@ assert(installerStats.size > 50 * 1024 * 1024, `El instalador debe ser mayor a 5
 
 console.log(`✓ Instalador NSIS verificado: ${(installerStats.size / (1024 * 1024)).toFixed(2)} MB`);
 console.log('✅ [TEST PASSED] Todo el pipeline de empaquetado y distribución comercial de Windows verificado exitosamente.');
+

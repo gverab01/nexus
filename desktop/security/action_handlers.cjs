@@ -15,6 +15,22 @@ function sleep(ms) {
 }
 
 /**
+ * Ejecuta un script en un contexto aislado (World 999) del webContents para garantizar
+ * que errores no capturados o de hidratación (como Minified React error #418) en el
+ * contexto principal de LinkedIn no interrumpan la evaluación ni hagan fallar la promesa.
+ */
+async function safeExecuteInIsolatedWorld(win, scriptCode) {
+  if (win && win.webContents && typeof win.webContents.executeJavaScriptInIsolatedWorld === 'function') {
+    try {
+      return await win.webContents.executeJavaScriptInIsolatedWorld(999, [{ code: scriptCode }]);
+    } catch (e) {
+      // Fallback a executeJavaScript estándar si el aislamiento falla
+    }
+  }
+  return await win.webContents.executeJavaScript(scriptCode, false);
+}
+
+/**
  * Despacha la ejecución de una acción verificada en la ventana de Chromium correspondiente.
  */
 async function executeAction(action, params, windows, options = {}) {
@@ -848,7 +864,7 @@ async function handleLinkedInReadContactInfo(win, params) {
     await sleep(1500);
   }
 
-  const contactData = await win.webContents.executeJavaScript(`
+  const contactData = await safeExecuteInIsolatedWorld(win, `
     (() => {
       let email = null;
       let phone = null;
@@ -961,7 +977,7 @@ async function handleLinkedInEnrichProfile(win, params = {}) {
   }
 
   // Desplazamiento progresivo orgánico para activar lazy loading de Experiencia en SDUI
-  await win.webContents.executeJavaScript(`
+  await safeExecuteInIsolatedWorld(win, `
     (async () => {
       try {
         const ws = document.getElementById('workspace') || document.querySelector('main');
@@ -995,7 +1011,7 @@ async function handleLinkedInEnrichProfile(win, params = {}) {
   await sleep(1500);
 
   // Extracción precompilada del perfil
-  const profileData = await win.webContents.executeJavaScript(`
+  const profileData = await safeExecuteInIsolatedWorld(win, `
     (() => {
       try {
         const url = window.location.href;
@@ -1390,7 +1406,7 @@ async function handleLinkedInEnrichProfile(win, params = {}) {
       });
       await sleep(2000);
 
-      const detResult = await win.webContents.executeJavaScript(`
+      const detResult = await safeExecuteInIsolatedWorld(win, `
         (() => {
           try {
             const isEmploymentType = (t) => {

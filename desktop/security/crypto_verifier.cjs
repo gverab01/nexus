@@ -67,9 +67,58 @@ function canonicalizeJson(obj) {
   return '{' + parts.join(',') + '}';
 }
 
+/**
+ * Resuelve de forma robusta la ubicación de almacenamiento de llaves del dispositivo:
+ * 1. En Electron (producción/runtime): app.getPath('userData')/storage/device_keys
+ * 2. Si se define variable de entorno explícita: NEXUS_DEVICE_KEYS_DIR
+ * 3. En desarrollo / tests puros Node: storage/device_keys en raíz del proyecto
+ */
+function resolveDefaultKeysDirectory() {
+  let targetDir = null;
+
+  try {
+    const electron = require('electron');
+    const app = electron.app || (electron.remote && electron.remote.app);
+    if (app && typeof app.getPath === 'function') {
+      const userData = app.getPath('userData');
+      if (userData) {
+        targetDir = path.join(userData, 'storage', 'device_keys');
+      }
+    }
+  } catch (e) {}
+
+  if (process.env.NEXUS_DEVICE_KEYS_DIR) {
+    targetDir = process.env.NEXUS_DEVICE_KEYS_DIR;
+  }
+
+  if (!targetDir) {
+    targetDir = path.join(__dirname, '..', '..', 'storage', 'device_keys');
+  }
+
+  // Migración transparente si existen llaves históricas de dev y targetDir aún no existe
+  try {
+    const legacyDevDir = path.join(__dirname, '..', '..', 'storage', 'device_keys');
+    if (targetDir !== legacyDevDir && !fs.existsSync(targetDir) && fs.existsSync(legacyDevDir)) {
+      const legacyPriv = path.join(legacyDevDir, 'device_private.pem');
+      if (fs.existsSync(legacyPriv)) {
+        fs.mkdirSync(targetDir, { recursive: true });
+        for (const file of fs.readdirSync(legacyDevDir)) {
+          const src = path.join(legacyDevDir, file);
+          const dst = path.join(targetDir, file);
+          if (fs.statSync(src).isFile()) {
+            fs.copyFileSync(src, dst);
+          }
+        }
+      }
+    }
+  } catch (err) {}
+
+  return targetDir;
+}
+
 class CryptoVerifier {
   constructor(keysDirectory) {
-    this.keysDir = keysDirectory || path.join(process.cwd(), 'device_keys');
+    this.keysDir = keysDirectory || resolveDefaultKeysDirectory();
     this.deviceId = null;
     this.privateKey = null;
     this.publicKey = null;
@@ -288,5 +337,6 @@ module.exports = {
   ALLOWED_ACTIONS,
   canonicalizeJson,
   seenNonces,
-  seenCommandIds
+  seenCommandIds,
+  resolveDefaultKeysDirectory
 };

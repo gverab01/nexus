@@ -1,7 +1,7 @@
 const http = require('http');
 const https = require('https');
 const path = require('path');
-const { CryptoVerifier } = require('./security/crypto_verifier.cjs');
+const { CryptoVerifier, resolveDefaultKeysDirectory } = require('./security/crypto_verifier.cjs');
 const { executeAction } = require('./security/action_handlers.cjs');
 
 let isLoopRunning = false;
@@ -28,8 +28,8 @@ let runnerDetails = {
 
 let apiBase = process.env.API_BASE_URL || 'http://127.0.0.1:8000';
 
-// Inicializar verificador criptográfico Ed25519 con claves persistentes del dispositivo
-const defaultKeysDir = path.join(__dirname, '..', 'storage', 'device_keys');
+// Inicializar verificador criptográfico Ed25519 con claves persistentes en userData o storage
+const defaultKeysDir = resolveDefaultKeysDirectory();
 let cryptoVerifier = new CryptoVerifier(defaultKeysDir);
 let isDeviceRegistered = false;
 let registeredTenantId = null;

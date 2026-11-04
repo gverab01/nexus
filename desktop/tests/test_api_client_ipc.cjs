@@ -54,3 +54,4 @@ async function simulateResolveApiBase(win) {
 
   console.log('✅ [TEST PASSED] Resolución dinámica de API y sincronización IPC verificada exitosamente.');
 })();
+

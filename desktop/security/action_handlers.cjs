@@ -20,14 +20,40 @@ function sleep(ms) {
  * contexto principal de LinkedIn no interrumpan la evaluación ni hagan fallar la promesa.
  */
 async function safeExecuteInIsolatedWorld(win, scriptCode) {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const logFile = path.join(os.homedir(), 'AppData', 'Roaming', 'NexusReach Pro', 'exec_debug.log');
+
+  let isolatedErr = null;
   if (win && win.webContents && typeof win.webContents.executeJavaScriptInIsolatedWorld === 'function') {
     try {
-      return await win.webContents.executeJavaScriptInIsolatedWorld(999, [{ code: scriptCode }]);
+      const res = await win.webContents.executeJavaScriptInIsolatedWorld(999, [{ code: scriptCode }]);
+      try {
+        fs.appendFileSync(logFile, `[${new Date().toISOString()}] IsolatedWorld SUCCESS\n`);
+      } catch (_) {}
+      return res;
     } catch (e) {
-      // Fallback a executeJavaScript estándar si el aislamiento falla
+      isolatedErr = e;
+      try {
+        fs.appendFileSync(logFile, `[${new Date().toISOString()}] IsolatedWorld FAILED: ${e.stack || e.message}\n`);
+      } catch (_) {}
     }
   }
-  return await win.webContents.executeJavaScript(scriptCode, false);
+
+  try {
+    const stdRes = await win.webContents.executeJavaScript(scriptCode, false);
+    try {
+      fs.appendFileSync(logFile, `[${new Date().toISOString()}] StdEval SUCCESS\n`);
+    } catch (_) {}
+    return stdRes;
+  } catch (stdErr) {
+    try {
+      fs.appendFileSync(logFile, `[${new Date().toISOString()}] StdEval FAILED: ${stdErr.stack || stdErr.message}\n`);
+    } catch (_) {}
+    const msg = `IsolatedWorld: [${isolatedErr ? (isolatedErr.message || isolatedErr) : 'N/A'}] | StdEval: [${stdErr.message || stdErr}]`;
+    throw new Error(msg);
+  }
 }
 
 /**
@@ -1006,7 +1032,7 @@ async function handleLinkedInEnrichProfile(win, params = {}) {
         return false;
       }
     })()
-  `, true).catch(() => {});
+  `).catch(() => {});
 
   await sleep(1500);
 
@@ -1388,7 +1414,7 @@ async function handleLinkedInEnrichProfile(win, params = {}) {
         return { ok: false, error: e.message };
       }
     })()
-  `, true).catch(err => ({ ok: false, error: 'No se pudo leer el contenido del perfil en LinkedIn: ' + (err.message || 'Error en script de extracción') }));
+  `).catch(err => ({ ok: false, error: 'No se pudo leer el contenido del perfil en LinkedIn: ' + (err.message || 'Error en script de extracción') }));
 
   // Fallback si falta cargo o empresa: consultar /details/experience/
   let firstEntry = null;

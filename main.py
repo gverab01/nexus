@@ -59,6 +59,9 @@ async def add_smart_cache_headers(request, call_next):
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 if os.path.exists(STATIC_DIR):
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    dist_assets_dir = os.path.join(STATIC_DIR, "dist", "assets")
+    if os.path.exists(dist_assets_dir):
+        app.mount("/assets", StaticFiles(directory=dist_assets_dir), name="dist_assets")
 
 def start_periodic_delay_sweeper():
     """Inicia un hilo en segundo plano que promueve automáticamente prospectos en espera expirada cada 25 segundos."""

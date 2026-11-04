@@ -2,9 +2,9 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
-// Configuración de Vite con base path para FastAPI static y proxy de desarrollo
+// Configuración de Vite con base path relativa para soporte dual (Electron local file y FastAPI static)
 export default defineConfig({
-  base: '/static/dist/',
+  base: './',
   plugins: [
     react(),
     tailwindcss(),

@@ -440,6 +440,87 @@ function getOrCreateWorkWindow(shouldShow = false, channel = null, url = null) {
 }
 
 /**
+ * Pantalla de contingencia / reconexión cuando no es posible cargar la interfaz.
+ */
+function showConnectionErrorScreen(win, errorDetails) {
+  if (!win || win.isDestroyed()) return;
+  const safeError = String(errorDetails || 'No se pudo cargar la interfaz de usuario').replace(/[<>&"']/g, '');
+  const errorHtml = `
+    <!DOCTYPE html>
+    <html lang="es" style="background:#090A0C;color:#f4f4f5;font-family:system-ui,-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
+    <head><meta charset="utf-8"><title>NexusReach Pro | Estado de Conexión</title></head>
+    <body style="text-align:center;max-width:480px;padding:32px;">
+      <div style="font-size:42px;margin-bottom:16px;">⚡</div>
+      <h2 style="font-size:18px;font-weight:600;margin:0 0 8px;color:#fff;">NexusReach Pro</h2>
+      <p style="font-size:13px;color:#a1a1aa;line-height:1.6;margin:0 0 20px;">
+        No fue posible iniciar la interfaz de la aplicación.<br>
+        <span style="font-size:11px;color:#71717a;">${safeError}</span>
+      </p>
+      <button onclick="window.location.reload()" style="background:#fff;color:#090A0C;border:none;padding:8px 20px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;transition:opacity 0.2s;">
+        Reintentar
+      </button>
+    </body>
+    </html>
+  `;
+  win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(errorHtml)}`);
+}
+
+/**
+ * Resuelve y carga la interfaz de usuario en mainWindow:
+ * 1. Prioridad comercial: Carga la UI compilada de React localmente (dist-ui/index.html o static/dist/index.html).
+ * 2. Si se especifica APP_URL o modo --dev, usa la URL remota / servidor Vite de desarrollo.
+ * 3. Fallback: servidor FastAPI local http://127.0.0.1:8000/.
+ */
+function loadAppUi(win) {
+  const isDevArg = process.argv.includes('--dev');
+  const envAppUrl = process.env.APP_URL;
+
+  if (envAppUrl || isDevArg) {
+    const targetUrl = envAppUrl || 'http://localhost:5173';
+    console.log(`[Electron UI] Modo desarrollo / URL externa activa: ${targetUrl}`);
+    win.loadURL(targetUrl).catch((err) => {
+      console.warn(`[Electron UI] Error cargando URL (${targetUrl}), intentando fallback local:`, err.message);
+      loadLocalUi(win);
+    });
+    return;
+  }
+
+  loadLocalUi(win);
+}
+
+function loadLocalUi(win) {
+  const candidatePaths = [
+    path.join(__dirname, 'dist-ui', 'index.html'),
+    path.join(__dirname, '..', 'static', 'dist', 'index.html'),
+    path.join(app.getAppPath(), 'dist-ui', 'index.html'),
+    path.join(app.getAppPath(), 'static', 'dist', 'index.html')
+  ];
+
+  let localIndexPath = null;
+  for (const candidate of candidatePaths) {
+    if (fs.existsSync(candidate)) {
+      localIndexPath = candidate;
+      break;
+    }
+  }
+
+  if (localIndexPath) {
+    console.log(`[Electron UI] Cargando interfaz React local desde: ${localIndexPath}`);
+    win.loadFile(localIndexPath).catch((err) => {
+      console.error(`[Electron UI] Error cargando archivo local (${localIndexPath}):`, err.message);
+      showConnectionErrorScreen(win, err.message);
+    });
+  } else {
+    const fallbackUrl = 'http://127.0.0.1:8000/';
+    console.log(`[Electron UI] No se detectó build local en disco. Intentando servidor FastAPI: ${fallbackUrl}`);
+    win.loadURL(fallbackUrl).catch((err) => {
+      console.error(`[Electron UI] Fallback a servidor falló (${fallbackUrl}):`, err.message);
+      showConnectionErrorScreen(win, `No se encontró la interfaz compilada local ni un backend activo en ${fallbackUrl}`);
+    });
+  }
+}
+
+/**
  * Crea la ventana principal del Dashboard de la aplicación.
  */
 function createMainWindow() {
@@ -457,10 +538,7 @@ function createMainWindow() {
     }
   });
 
-  const appUrl = process.env.APP_URL || 'http://127.0.0.1:8000/';
-  mainWindow.loadURL(appUrl).catch((err) => {
-    console.error(`Error cargando URL principal (${appUrl}):`, err.message);
-  });
+  loadAppUi(mainWindow);
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -921,7 +999,11 @@ app.whenReady().then(() => {
     if (!mainWindow || mainWindow.isDestroyed()) return null;
     try {
       const currentUrl = mainWindow.webContents.getURL() || '';
-      if (!currentUrl.startsWith('http://127.0.0.1:8000') && !currentUrl.startsWith('http://localhost:8000')) {
+      const isAllowedOrigin = currentUrl.startsWith('file://') ||
+                              currentUrl.startsWith('http://127.0.0.1:8000') ||
+                              currentUrl.startsWith('http://localhost:8000') ||
+                              currentUrl.startsWith('http://localhost:5173');
+      if (!isAllowedOrigin) {
         return null;
       }
       const tok = await mainWindow.webContents.executeJavaScript(

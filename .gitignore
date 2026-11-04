@@ -57,7 +57,9 @@ chrome_data/
 
 # Logs
 *.log
-logs/
+/logs/
+!frontend/src/components/Activity/
+!frontend/src/components/Logs/
 
 # Operating System & Editors
 .DS_Store

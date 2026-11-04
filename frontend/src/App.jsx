@@ -5,7 +5,7 @@ import SafetyBanner from './components/SafetyBanner';
 import ProspectsView from './components/Prospects/ProspectsView';
 import ListsView from './components/Lists/ListsView';
 import SequencesView from './components/Sequences/SequencesView';
-import ActivityLogsView from './components/Logs/ActivityLogsView';
+import ActivityLogsView from './components/Activity/ActivityLogsView';
 import SuperAdminView from './components/Admin/SuperAdminView';
 import AdminClientsView from './components/Admin/AdminClientsView';
 import CreateAccountView from './components/Admin/CreateAccountView';

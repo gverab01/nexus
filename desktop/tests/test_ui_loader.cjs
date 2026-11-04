@@ -38,3 +38,4 @@ assert(mainContent.includes('currentUrl.startsWith(\'file://\')'), 'workerRunner
 console.log('✓ Funciones de carga de UI y contingencia validadas en desktop/main.cjs.');
 
 console.log('✅ [TEST PASSED] Carga local de UI, paths relativos y contingencia verificados exitosamente.');
+

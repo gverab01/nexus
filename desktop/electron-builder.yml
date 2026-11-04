@@ -11,12 +11,15 @@ directories:
 
 files:
   - "**/*"
+  - "dist-ui/**"
   - "!node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}"
   - "!node_modules/*/{test,__tests__,tests,pow-test}"
   - "!node_modules/*.d.ts"
   - "!node_modules/.bin"
   - "!tests/**"
   - "!scratch/**"
+  - "!scripts/**"
+  - "!dist/**"
   - "!*.bat"
   - "!*.py"
   - "!*.sql"
@@ -38,10 +41,8 @@ win:
     - target: nsis
       arch:
         - x64
-  icon: build/icons/icon.ico
-  verifyUpdateCodeSignature: true
-  signAndEditExecutable: true
-  rfc3161TimeStampServer: "http://timestamp.digicert.com"
+  # En CI/CD de producción, electron-builder firma automáticamente si CSC_LINK está presente.
+  # rfc3161TimeStampServer: "http://timestamp.digicert.com"
 
 nsis:
   oneClick: false

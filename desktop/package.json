@@ -2,13 +2,17 @@
   "name": "nexusreach-desktop",
   "version": "1.0.0",
   "description": "NexusReach Pro - Suite de Prospección B2B",
+  "author": "NexusReach B2B Inc.",
   "main": "main.cjs",
   "scripts": {
+    "prepare:ui": "node scripts/prepare_ui.cjs",
+    "build:frontend": "npm --prefix ../frontend run build && npm run prepare:ui",
     "start": "electron main.cjs",
     "dev": "electron main.cjs --dev",
-    "dist": "electron-builder",
-    "dist:win": "electron-builder --win --x64",
-    "dist:mac": "electron-builder --mac"
+    "dist": "npm run prepare:ui && electron-builder",
+    "dist:win": "npm run prepare:ui && electron-builder --win --x64",
+    "dist:win:dir": "npm run prepare:ui && electron-builder --win --x64 --dir",
+    "dist:mac": "npm run prepare:ui && electron-builder --mac"
   },
   "dependencies": {
     "electron-updater": "^6.3.9"

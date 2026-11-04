@@ -40,6 +40,8 @@ node_modules/
 */node_modules/
 dist/
 build/
+dist-ui/
+desktop/dist-ui/
 frontend/dist/
 frontend/dist-ssr/
 npm-debug.log*

@@ -75,3 +75,4 @@ assert.strictEqual(exposedApi.isElectron, true, 'isElectron debe ser true');
 
   console.log('✅ [TEST PASSED] desktop/preload.cjs expone exactamente el contrato seguro esperado sin fugas de seguridad.');
 })();
+

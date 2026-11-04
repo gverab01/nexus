@@ -1,7 +1,42 @@
 // Cliente centralizado de comunicación con la API de FastAPI
 // Sigue la convención de funciones en inglés y comentarios en español
 
-const API_BASE = '/api';
+let cachedApiBase = null;
+
+/**
+ * Resuelve dinámicamente la URL base de la API:
+ * 1. Si corre dentro de Electron, consulta al proceso principal vía IPC (window.nexusDesktop).
+ * 2. Si existe variable de entorno VITE_API_URL en el build.
+ * 3. Fallback: '/api' relativo para servidor web local o proxy de desarrollo.
+ */
+export async function resolveApiBase() {
+  if (cachedApiBase !== null) return cachedApiBase;
+
+  // 1. Electron bridge (Preload IPC)
+  if (typeof window !== 'undefined' && window.nexusDesktop?.getApiBaseUrl) {
+    try {
+      const electronUrl = await window.nexusDesktop.getApiBaseUrl();
+      if (electronUrl && typeof electronUrl === 'string') {
+        const clean = electronUrl.replace(/\/+$/, '');
+        cachedApiBase = clean.endsWith('/api') ? clean : `${clean}/api`;
+        return cachedApiBase;
+      }
+    } catch (err) {
+      console.warn('[API Base] Error obteniendo URL desde Electron, usando fallback:', err);
+    }
+  }
+
+  // 2. Variable de entorno Vite
+  if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_URL) {
+    const envUrl = String(import.meta.env.VITE_API_URL).replace(/\/+$/, '');
+    cachedApiBase = envUrl.endsWith('/api') ? envUrl : `${envUrl}/api`;
+    return cachedApiBase;
+  }
+
+  // 3. Fallback relativo
+  cachedApiBase = '/api';
+  return cachedApiBase;
+}
 
 const TOKEN_KEY = 'nexus_session_token';
 
@@ -13,14 +48,20 @@ export function getSessionToken() {
   }
 }
 
-export function setSessionToken(token) {
+export function setSessionToken(token, tenantId = null) {
   try {
     if (token) {
       sessionStorage.setItem(TOKEN_KEY, token);
       localStorage.setItem(TOKEN_KEY, token);
+      if (typeof window !== 'undefined' && window.nexusDesktop?.setAuthSession) {
+        window.nexusDesktop.setAuthSession({ sessionToken: token, tenantId }).catch(() => {});
+      }
     } else {
       sessionStorage.removeItem(TOKEN_KEY);
       localStorage.removeItem(TOKEN_KEY);
+      if (typeof window !== 'undefined' && window.nexusDesktop?.clearAuthSession) {
+        window.nexusDesktop.clearAuthSession().catch(() => {});
+      }
     }
   } catch {}
 }
@@ -29,6 +70,9 @@ export function clearSessionToken() {
   try {
     sessionStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(TOKEN_KEY);
+    if (typeof window !== 'undefined' && window.nexusDesktop?.clearAuthSession) {
+      window.nexusDesktop.clearAuthSession().catch(() => {});
+    }
   } catch {}
 }
 
@@ -37,6 +81,7 @@ export function clearSessionToken() {
  */
 async function request(endpoint, options = {}) {
   try {
+    const apiBase = await resolveApiBase();
     const token = getSessionToken();
     const authHeaders = token ? { 
       Authorization: `Bearer ${token}`,
@@ -52,7 +97,7 @@ async function request(endpoint, options = {}) {
       ...options,
     };
 
-    const response = await fetch(`${API_BASE}${endpoint}`, config);
+    const response = await fetch(`${apiBase}${endpoint}`, config);
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
       let message = `Error HTTP ${response.status}`;
@@ -85,7 +130,8 @@ export async function loginUser(email, password) {
     body: JSON.stringify({ email, password }),
   });
   if (data?.token) {
-    setSessionToken(data.token);
+    const tenantId = data.usuario?.tenant_id || data.tenant_id || null;
+    setSessionToken(data.token, tenantId);
   }
   return data;
 }
@@ -95,7 +141,12 @@ export async function checkUserSession() {
   if (!token) return null;
   try {
     const res = await request('/auth/sesion');
-    return res?.usuario || null;
+    const usuario = res?.usuario || null;
+    if (usuario && typeof window !== 'undefined' && window.nexusDesktop?.setAuthSession) {
+      const tenantId = usuario.tenant_id || (usuario.tenant && usuario.tenant.id) || null;
+      window.nexusDesktop.setAuthSession({ sessionToken: token, tenantId }).catch(() => {});
+    }
+    return usuario;
   } catch {
     clearSessionToken();
     return null;

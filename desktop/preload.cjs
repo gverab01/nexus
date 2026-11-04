@@ -77,3 +77,4 @@ contextBridge.exposeInMainWorld('nexusDesktop', {
     };
   }
 });
+

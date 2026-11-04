@@ -1183,7 +1183,7 @@ async function handleLinkedInEnrichProfile(win, params = {}) {
             if (firstItem) {
               const text = (firstItem.innerText || '').trim();
               if (text && !text.toLowerCase().includes('educación') && !text.toLowerCase().includes('education')) {
-                expCompany = text.split('\n')[0].replace(/[·•|;].*$/, '').trim();
+                expCompany = text.split('\\n')[0].replace(/[·•|;].*$/, '').trim();
               }
             }
           }
@@ -1192,11 +1192,11 @@ async function handleLinkedInEnrichProfile(win, params = {}) {
             if (companyLink) {
               const text = (companyLink.innerText || '').trim();
               if (text && text.length > 2 && text.length < 100) {
-                expCompany = text.split('\n')[0].replace(/[·•|;].*$/, '').trim();
+                expCompany = text.split('\\n')[0].replace(/[·•|;].*$/, '').trim();
               } else {
                 const img = companyLink.querySelector('img[alt]');
                 if (img) {
-                  const alt = (img.getAttribute('alt') || '').replace(/^(?:Logotipo\s+de|Logo\s+de)\s+/i, '').replace(/\s+logo$/i, '').trim();
+                  const alt = (img.getAttribute('alt') || '').replace(/^(?:Logotipo\\s+de|Logo\\s+de)\\s+/i, '').replace(/\\s+logo$/i, '').trim();
                   if (alt && alt.length > 2 && alt.length < 100) expCompany = alt;
                 }
               }
@@ -1207,7 +1207,7 @@ async function handleLinkedInEnrichProfile(win, params = {}) {
             if (currentCompBtn) {
               const text = (currentCompBtn.innerText || '').trim();
               if (text && text.length > 2 && text.length < 100) {
-                expCompany = text.split('\n')[0].replace(/[·•|;].*$/, '').trim();
+                expCompany = text.split('\\n')[0].replace(/[·•|;].*$/, '').trim();
               }
             }
           }
@@ -1275,12 +1275,12 @@ async function handleLinkedInEnrichProfile(win, params = {}) {
             // Caso A: Experiencia agrupada (múltiples cargos en la misma empresa)
             const subRoles = Array.from(firstJobLi.querySelectorAll('ul li'));
             if (subRoles.length > 0) {
-              const headerLines = firstJobLi.innerText.split('\n').map(l => l.trim()).filter(Boolean);
+              const headerLines = firstJobLi.innerText.split('\\n').map(l => l.trim()).filter(Boolean);
               if (headerLines.length > 0 && !isEmploymentType(headerLines[0])) {
                 if (!expCompany) expCompany = headerLines[0].replace(/[·•|;].*$/, '').trim();
               }
               const firstSub = subRoles[0];
-              const subLines = firstSub.innerText.split('\n').map(l => l.trim()).filter(Boolean);
+              const subLines = firstSub.innerText.split('\\n').map(l => l.trim()).filter(Boolean);
               if (subLines.length > 0) {
                 if (!expRole) expRole = cleanRole(subLines[0]);
               }
@@ -1291,17 +1291,17 @@ async function handleLinkedInEnrichProfile(win, params = {}) {
               if (compLink && !expCompany) {
                 const cText = (compLink.innerText || '').trim();
                 if (cText && cText.length > 2 && cText.length < 100 && !isEmploymentType(cText)) {
-                  expCompany = cText.split('\n')[0].replace(/[·•|;].*$/, '').trim();
+                  expCompany = cText.split('\\n')[0].replace(/[·•|;].*$/, '').trim();
                 } else {
                   const img = compLink.querySelector('img[alt]');
                   if (img) {
-                    const alt = (img.getAttribute('alt') || '').replace(/^(?:Logotipo\s+de|Logo\s+de)\s+/i, '').replace(/\s+logo$/i, '').trim();
+                    const alt = (img.getAttribute('alt') || '').replace(/^(?:Logotipo\\s+de|Logo\\s+de)\\s+/i, '').replace(/\\s+logo$/i, '').trim();
                     if (alt && alt.length > 2 && alt.length < 100) expCompany = alt;
                   }
                 }
               }
 
-              const lines = firstJobLi.innerText.split('\n').map(l => l.trim()).filter(Boolean);
+              const lines = firstJobLi.innerText.split('\\n').map(l => l.trim()).filter(Boolean);
               if (lines.length >= 1 && !expRole) {
                 expRole = cleanRole(lines[0]);
               }

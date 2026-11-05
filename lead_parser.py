@@ -32,11 +32,22 @@ def is_invalid_role(role: str) -> bool:
     clean = role.strip().lower()
     return any(re.search(pat, clean, re.IGNORECASE) for pat in INVALID_ROLES_REGEX)
 
+def clean_institution_name(inst: str) -> str:
+    """
+    Limpia prefijos de accesibilidad de LinkedIn como 'Ver empresa: ', 'Logotipo de ', etc.
+    """
+    if not inst:
+        return ""
+    cleaned = re.sub(r'^(?:Ver\s+(?:la\s+)?empresa\s*:\s*|Logotipo\s+de\s+|Logo\s+de\s+)', '', inst.strip(), flags=re.IGNORECASE)
+    cleaned = re.sub(r'\s+logo$', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'[·•|;].*$', '', cleaned).strip()
+    return cleaned
+
 def is_invalid_institution(inst: str) -> bool:
     if not inst:
         return True
-    clean = inst.strip().lower()
-    if clean in EMPLOYMENT_TYPES or clean in ["institución escolar", "chile", "empresa u organización", "institución educativa"]:
+    clean = clean_institution_name(inst).strip().lower()
+    if not clean or clean in EMPLOYMENT_TYPES or clean in ["institución escolar", "chile", "empresa u organización", "institución educativa"]:
         return True
     return any(re.search(pat, clean, re.IGNORECASE) for pat in INVALID_INSTITUTIONS_REGEX)
 
@@ -186,7 +197,7 @@ def parse_cargo_and_institucion(headline: str, snippet_actual: str = "", default
         best_segment = ""
         best_idx = 0
         for i, seg in enumerate(viable_segments):
-            if re.search(r'\b(en|at|@)\b', seg, re.IGNORECASE):
+            if re.search(r'\b(?:en|at)\b|@', seg, re.IGNORECASE):
                 best_segment = seg
                 best_idx = i
                 break
@@ -203,18 +214,12 @@ def parse_cargo_and_institucion(headline: str, snippet_actual: str = "", default
             best_segment = viable_segments[0]
             best_idx = 0
 
-        # Si la institución no ha sido determinada, verificar si el siguiente segmento viable es la empresa
-        if not institucion and best_idx + 1 < len(viable_segments):
-            next_cand = re.sub(r'[\.\,]+$', '', viable_segments[best_idx + 1]).strip()
-            if next_cand and len(next_cand) < 70 and not is_invalid_institution(next_cand) and not is_fluff_or_academic(next_cand):
-                institucion = next_cand
-
         # Descomponer best_segment en Puesto y Empresa
-        # Caso A: Separador explícito ' en ' o ' at ' o ' @ '
-        if re.search(r'\s+(?:en|at|@)\s+', best_segment, re.IGNORECASE):
-            parts = re.split(r'\s+(?:en|at|@)\s+', best_segment, maxsplit=1, flags=re.IGNORECASE)
+        # Caso A: Separador explícito ' en ' o ' at ' o ' @ ' / '@'
+        if re.search(r'\s+(?:en\s+|at\s+|@\s*)', best_segment, re.IGNORECASE):
+            parts = re.split(r'\s+(?:en\s+|at\s+|@\s*)', best_segment, maxsplit=1, flags=re.IGNORECASE)
             cargo_actual = parts[0].strip()
-            comp = parts[1].strip()
+            comp = clean_institution_name(parts[1].strip())
             if not institucion and comp and not is_invalid_institution(comp):
                 institucion = comp
         # Caso B: Separador por institución escolar explícita (Colegio, Liceo, Escuela, Universidad, Instituto, etc.)
@@ -222,7 +227,7 @@ def parse_cargo_and_institucion(headline: str, snippet_actual: str = "", default
             comp_match = re.search(r'\b(Colegio|Liceo|Escuela|Universidad|Instituto|Fundaci[oó]n|Red\s+de\s+Colegios|Rappi|TOP PARTNERS)\b', best_segment, re.IGNORECASE)
             if comp_match and comp_match.start() > 2:
                 prefix = best_segment[:comp_match.start()].strip()
-                company_part = best_segment[comp_match.start():].strip()
+                company_part = clean_institution_name(best_segment[comp_match.start():].strip())
                 if prefix.lower() in ["director de", "coordinador de", "encargado de", "jefe de"]:
                     cargo_actual = best_segment
                 else:
@@ -231,6 +236,12 @@ def parse_cargo_and_institucion(headline: str, snippet_actual: str = "", default
                         institucion = company_part
             else:
                 cargo_actual = best_segment
+
+        # Fallback: Si la institución no ha sido determinada, verificar si el siguiente segmento viable es la empresa
+        if not institucion and best_idx + 1 < len(viable_segments):
+            next_cand = clean_institution_name(re.sub(r'[\.\,]+$', '', viable_segments[best_idx + 1]).strip())
+            if next_cand and len(next_cand) < 70 and not is_invalid_institution(next_cand) and not is_fluff_or_academic(next_cand):
+                institucion = next_cand
 
     # 3. Limpiezas especiales de cargo_actual
     if is_invalid_role(cargo_actual):
@@ -269,13 +280,16 @@ def parse_cargo_and_institucion(headline: str, snippet_actual: str = "", default
     if not institucion:
         institucion = default_institucion or ''
 
+    institucion = clean_institution_name(institucion)
     institucion = re.sub(r'[|,;·•].*$', '', institucion).strip()
-    institucion = re.sub(r'[\/|;,\-–—]+$', '', institucion).strip()
+    institucion = re.sub(r'[\/|;,\-–—\.]+$', '', institucion).strip()
     if is_invalid_institution(institucion):
         institucion = ""
 
     # 4. Refinar instituciones genéricas de tipo 'Programa de Integración Escolar' / 'PIE'
     institucion = refine_pie_institution(institucion, role=cargo_actual, headline=headline, location=location)
+    institucion = clean_institution_name(institucion)
+    institucion = re.sub(r'[\/|;,\-–—\.]+$', '', institucion).strip()
 
     return cargo_actual, institucion
 

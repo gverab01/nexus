@@ -12,6 +12,7 @@ from lead_parser import (
     parse_cargo_and_institucion,
     is_invalid_role,
     is_invalid_institution,
+    clean_institution_name,
     refine_pie_institution
 )
 
@@ -972,7 +973,7 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
             return {"ok": False, "error": "Página no encontrada en LinkedIn (404)"}
 
         exp_role = res_data.get("expRole", "")
-        exp_company = res_data.get("expCompany", "")
+        exp_company = clean_institution_name(res_data.get("expCompany", ""))
         headline = res_data.get("headline", "")
         loc = res_data.get("location") or "Chile"
         grado = res_data.get("grado") or "2°"
@@ -982,29 +983,50 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
         if exp_company and is_invalid_institution(exp_company):
             exp_company = ""
 
+        # Extraer si el titular contiene una empresa explícita destacada (ej: @Vesta Software Group)
+        headline_comp = ""
+        m_head_at = re.search(r'@\s*([A-Za-zÁÉÍÓÚáéíóúñÑ0-9\s\.\&\-]+?)(?:\s+[|;•·\n\–\—]|$)', headline)
+        if m_head_at:
+            cand = clean_institution_name(m_head_at.group(1))
+            if cand and not is_invalid_institution(cand) and len(cand) >= 2:
+                headline_comp = cand
+
         details = res_data.get("details")
         if details and isinstance(details, dict):
             first_entry = details.get("firstEntry")
             if first_entry and isinstance(first_entry, dict):
                 det_role = first_entry.get("role", "")
-                det_company = first_entry.get("company", "")
+                det_company = clean_institution_name(first_entry.get("company", ""))
                 det_loc = first_entry.get("location", "")
-                if det_role and not is_invalid_role(det_role):
+                det_date = (first_entry.get("date") or "").lower()
+                is_current = "actualidad" in det_date or "present" in det_date or not det_date
+                
+                # Solo reemplazar si es un cargo actual en vigor o si no teníamos rol
+                if det_role and not is_invalid_role(det_role) and (not exp_role or is_current):
                     exp_role = det_role
-                if det_company and not is_invalid_institution(det_company):
+                if det_company and not is_invalid_institution(det_company) and (not exp_company or is_current):
                     exp_company = det_company
                 if det_loc and (not loc or loc in ["Chile", "Área metropolitana de Santiago", "Gran Santiago", "Santiago"] or len(det_loc) > len(loc)):
                     loc = det_loc
+
+        # Si el headline especifica claramente la empresa con @ y exp_company no es coincidente o vino de fallback, preferir la empresa del headline
+        if headline_comp and (not exp_company or is_invalid_institution(exp_company)):
+            exp_company = headline_comp
 
         if exp_role and not is_invalid_role(exp_role):
             c_act, inst = parse_cargo_and_institucion(exp_role, default_institucion=exp_company, location=loc)
         else:
             c_act, inst = parse_cargo_and_institucion(headline, default_institucion=exp_company, location=loc)
 
+        if not inst and headline_comp:
+            inst = headline_comp
+
         if not inst and headline:
             match_en = re.search(r'\s+(?:en|at|@)\s+([^|;•·\n\–\—]+)', headline, re.IGNORECASE)
-            if match_en and not is_invalid_institution(match_en.group(1).strip()):
-                inst = match_en.group(1).strip()
+            if match_en:
+                cand_en = clean_institution_name(match_en.group(1).strip())
+                if cand_en and not is_invalid_institution(cand_en):
+                    inst = cand_en
 
         # Si aún no hay institución pero exp_company viene de LinkedIn, usarla directamente
         if not inst and exp_company and not is_invalid_institution(exp_company):

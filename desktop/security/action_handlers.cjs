@@ -1177,13 +1177,22 @@ async function handleLinkedInEnrichProfile(win, params = {}) {
 
         // 1. Extraer empresa actual desde la cabecera / Top Card del perfil (Máxima fidelidad en LinkedIn)
         if (introSec) {
+          const cleanCompName = (raw) => {
+            if (!raw) return '';
+            return raw.split('\\n')[0]
+              .replace(/^(?:Ver\s+(?:la\s+)?empresa\s*:\s*|Logotipo\s+de\s+|Logo\s+de\s+)/i, '')
+              .replace(/\s+logo$/i, '')
+              .replace(/[·•|;].*$/, '')
+              .trim();
+          };
+
           const rightPanel = introSec.querySelector('.pv-text-details__right-panel, ul.pv-text-details__right-panel');
           if (rightPanel) {
             const firstItem = rightPanel.querySelector('li');
             if (firstItem) {
               const text = (firstItem.innerText || '').trim();
               if (text && !text.toLowerCase().includes('educación') && !text.toLowerCase().includes('education')) {
-                expCompany = text.split('\\n')[0].replace(/[·•|;].*$/, '').trim();
+                expCompany = cleanCompName(text);
               }
             }
           }
@@ -1192,11 +1201,11 @@ async function handleLinkedInEnrichProfile(win, params = {}) {
             if (companyLink) {
               const text = (companyLink.innerText || '').trim();
               if (text && text.length > 2 && text.length < 100) {
-                expCompany = text.split('\\n')[0].replace(/[·•|;].*$/, '').trim();
+                expCompany = cleanCompName(text);
               } else {
                 const img = companyLink.querySelector('img[alt]');
                 if (img) {
-                  const alt = (img.getAttribute('alt') || '').replace(/^(?:Logotipo\\s+de|Logo\\s+de)\\s+/i, '').replace(/\\s+logo$/i, '').trim();
+                  const alt = cleanCompName(img.getAttribute('alt') || '');
                   if (alt && alt.length > 2 && alt.length < 100) expCompany = alt;
                 }
               }
@@ -1207,7 +1216,7 @@ async function handleLinkedInEnrichProfile(win, params = {}) {
             if (currentCompBtn) {
               const text = (currentCompBtn.innerText || '').trim();
               if (text && text.length > 2 && text.length < 100) {
-                expCompany = text.split('\\n')[0].replace(/[·•|;].*$/, '').trim();
+                expCompany = cleanCompName(text);
               }
             }
           }
@@ -1456,11 +1465,14 @@ async function handleLinkedInEnrichProfile(win, params = {}) {
             if (!main) return { ok: false, error: 'No se encontró main en details' };
 
             const allLis = Array.from(main.querySelectorAll('li'));
-            const validLis = allLis.filter(li => {
+            const currentLis = allLis.filter(li => {
               const text = (li.innerText || '').toLowerCase();
-              return (text.includes('actualidad') || text.includes('present') || isDateLine(text)) && 
+              return (text.includes('actualidad') || text.includes('present') || text.includes('presente')) && 
                      !li.parentElement.closest('li');
             });
+            const validLis = currentLis.length > 0 
+              ? currentLis 
+              : allLis.filter(li => isDateLine((li.innerText || '').toLowerCase()) && !li.parentElement.closest('li'));
 
             const itemsToProcess = validLis.length > 0 ? validLis : [main];
             for (const item of itemsToProcess) {
@@ -1478,7 +1490,11 @@ async function handleLinkedInEnrichProfile(win, params = {}) {
               let location = '';
 
               if (dateIdx >= 2) {
-                company = relevantLines[1].replace(/[·•|;].*$/, '').trim();
+                company = relevantLines[1]
+                  .replace(/^(?:Ver\s+(?:la\s+)?empresa\s*:\s*|Logotipo\s+de\s+|Logo\s+de\s+)/i, '')
+                  .replace(/\s+logo$/i, '')
+                  .replace(/[·•|;].*$/, '')
+                  .trim();
                 if (isEmploymentType(company)) company = '';
               }
 

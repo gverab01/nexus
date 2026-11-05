@@ -3,7 +3,8 @@ from typing import Tuple
 
 ACADEMIC_OR_FLUFF = [
     r'^(mag[ií]ster|mg\.?|master|mba|phd|diplomad[oa]|doctor[a]?|licenciad[oa]|post[g-]?grado)\b',
-    r'^(ayudo|helping|apasionad[oa]|transformando|buscando|abiert[oa]|speaker|conferencista|top voice|creador[a]?|liderazgo|innovaci[oó]n|educaci[oó]n)\b',
+    r'^(ayudo|helping|apasionad[oa]|comprometid[oa]|transformando|buscando|abiert[oa]|speaker|conferencista|top voice|creador[a]?|liderazgo|innovaci[oó]n|educaci[oó]n)\b',
+    r'^(?:cuando|si\s|por\s|para\s|creo|creemos|generando|construyendo)\b',
     r'^(ex-|former\s)\b',
     r'^(estudiante|alumno|postulante)\b'
 ]
@@ -107,6 +108,10 @@ COMMON_TITLES_PREFIX = [
     r'^coordinador[a]?\b',
     r'^encargad[oa]\s+de\s+convivencia\s+escolar\b',
     r'^encargad[oa]\b',
+    r'^gestor[a]?\b',
+    r'^orientador[a]?\b',
+    r'^l[ií]der\b',
+    r'^facilitador[a]?\b',
     r'^profesor[a]?\b',
     r'^docente\b',
     r'^psic[oó]log[oa]\s+educacional\b',
@@ -163,8 +168,8 @@ def parse_cargo_and_institucion(headline: str, snippet_actual: str = "", default
         # Limpiar emojis o caracteres decorativos iniciales
         clean_head = re.sub(r'^[^\w\s]+', '', headline).strip()
 
-        # Segmentar por separadores habituales de LinkedIn: | , ; • · – — y ' - '
-        segments = [s.strip() for s in re.split(r'\s*(?:[|;•·\n\–\—]|\s-\s)\s*', clean_head) if s.strip()]
+        # Segmentar por separadores habituales de LinkedIn: | , ; • · – — , punto y espacio, o ' - '
+        segments = [s.strip() for s in re.split(r'\s*(?:[|;•·\n\–\—]|\.\s+|\s-\s)\s*', clean_head) if s.strip()]
 
         # Si no hay barras pero hay '/' con roles (ej: Director de Colegio/ Líder Educativo Senior)
         if len(segments) <= 1 and '/' in clean_head:
@@ -172,27 +177,37 @@ def parse_cargo_and_institucion(headline: str, snippet_actual: str = "", default
             if len(sub_segs) > 1:
                 segments = sub_segs
 
-        # Descartar segmentos que sean puramente académicos, slogans o habilidades blandas
+        # Descartar segmentos que sean puramente académicos, slogans o frases filosóficas
         viable_segments = [s for s in segments if not is_fluff_or_academic(s) and not is_invalid_role(s)]
         if not viable_segments:
             viable_segments = segments
 
         # Buscar el segmento que contenga relación laboral " en " o " at " o "@"
         best_segment = ""
-        for seg in viable_segments:
+        best_idx = 0
+        for i, seg in enumerate(viable_segments):
             if re.search(r'\b(en|at|@)\b', seg, re.IGNORECASE):
                 best_segment = seg
+                best_idx = i
                 break
         
         # Si no tiene "en", buscar prefijos de cargos conocidos
         if not best_segment:
-            for seg in viable_segments:
+            for i, seg in enumerate(viable_segments):
                 if any(re.search(pat, seg, re.IGNORECASE) for pat in COMMON_TITLES_PREFIX):
                     best_segment = seg
+                    best_idx = i
                     break
 
         if not best_segment:
             best_segment = viable_segments[0]
+            best_idx = 0
+
+        # Si la institución no ha sido determinada, verificar si el siguiente segmento viable es la empresa
+        if not institucion and best_idx + 1 < len(viable_segments):
+            next_cand = re.sub(r'[\.\,]+$', '', viable_segments[best_idx + 1]).strip()
+            if next_cand and len(next_cand) < 70 and not is_invalid_institution(next_cand) and not is_fluff_or_academic(next_cand):
+                institucion = next_cand
 
         # Descomponer best_segment en Puesto y Empresa
         # Caso A: Separador explícito ' en ' o ' at ' o ' @ '

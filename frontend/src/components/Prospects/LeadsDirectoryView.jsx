@@ -93,13 +93,18 @@ export default function LeadsDirectoryView({ activeTenantWorkspace = '', onOpenL
         l.id === updatedLead.id
           ? {
               ...l,
-              cargo_actual: updatedLead.cargo_actual,
-              institucion_actual: updatedLead.institucion_actual,
-              ubicacion: updatedLead.ubicacion,
-              nombre: updatedLead.nombre,
-              grado_red: updatedLead.grado_red,
-              estado: updatedLead.estado,
-              updated_at: updatedLead.updated_at
+              ...updatedLead,
+              cargo: updatedLead.cargo_actual || updatedLead.cargo_titular || l.cargo,
+              cargo_actual: updatedLead.cargo_actual || l.cargo_actual,
+              cargo_titular: updatedLead.cargo_titular || l.cargo_titular,
+              institucion: updatedLead.institucion_actual || l.institucion,
+              institucion_actual: updatedLead.institucion_actual || l.institucion_actual,
+              empresa: updatedLead.institucion_actual || l.empresa || updatedLead.empresa,
+              ubicacion: updatedLead.ubicacion || l.ubicacion,
+              nombre: updatedLead.nombre || l.nombre,
+              grado_red: updatedLead.grado_red || l.grado_red,
+              estado: updatedLead.estado || l.estado,
+              updated_at: updatedLead.updated_at || l.updated_at
             }
           : l
       )

@@ -581,6 +581,18 @@ function createMainWindow() {
   });
 }
 
+// Cola de ejecución serializada (Mutex) para operaciones en la ventana de LinkedIn
+let extractionQueueMutex = Promise.resolve();
+
+function enqueueExtractionTask(taskFn) {
+  const nextTask = extractionQueueMutex.then(async () => {
+    return await taskFn();
+  });
+  // Asegurar que la cadena de promesas continúe aunque una tarea falle
+  extractionQueueMutex = nextTask.catch(() => {});
+  return nextTask;
+}
+
 /**
  * Servidor HTTP interno de automatización (puerto 9099).
  * Permite que el motor en Python ordene acciones de navegación, evaluación y clics.
@@ -913,29 +925,37 @@ function startInternalServer() {
 
         // 8. Extracción Precompilada Segura de Red (Conexiones 1º Grado e Invitaciones)
         if (urlPath === '/extract/network' && req.method === 'POST') {
-          const win = getOrCreateLinkedInWindow(false);
-          const result = await handleLinkedInExtractNetwork(win, parsed);
+          const result = await enqueueExtractionTask(async () => {
+            const win = getOrCreateLinkedInWindow(false);
+            return await handleLinkedInExtractNetwork(win, parsed);
+          });
           return sendJson(200, result);
         }
 
         // 9. Enriquecimiento / Extracción Precompilada Segura de Perfil en Vivo
         if (urlPath === '/extract/profile' && req.method === 'POST') {
-          const win = getOrCreateLinkedInWindow(false);
-          const result = await handleLinkedInEnrichProfile(win, parsed);
+          const result = await enqueueExtractionTask(async () => {
+            const win = getOrCreateLinkedInWindow(false);
+            return await handleLinkedInEnrichProfile(win, parsed);
+          });
           return sendJson(200, result);
         }
 
         // 10. Extracción Precompilada Segura de Datos de Contacto 1º Grado (Overlay)
         if (urlPath === '/extract/contact-info' && req.method === 'POST') {
-          const win = getOrCreateLinkedInWindow(false);
-          const result = await handleLinkedInReadContactInfo(win, parsed);
+          const result = await enqueueExtractionTask(async () => {
+            const win = getOrCreateLinkedInWindow(false);
+            return await handleLinkedInReadContactInfo(win, parsed);
+          });
           return sendJson(200, result);
         }
 
         // 11. Búsqueda y Extracción Precompilada Segura de Personas en LinkedIn
         if (urlPath === '/extract/search' && req.method === 'POST') {
-          const win = getOrCreateLinkedInWindow(false);
-          const result = await handleLinkedInSearchPeople(win, parsed);
+          const result = await enqueueExtractionTask(async () => {
+            const win = getOrCreateLinkedInWindow(false);
+            return await handleLinkedInSearchPeople(win, parsed);
+          });
           return sendJson(200, result);
         }
 

@@ -1,5 +1,5 @@
 // Vista global de Directorio / Base de Leads (CRM de Prospectos)
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   Users, 
   Search, 
@@ -36,6 +36,7 @@ import {
 import LeadModal from './LeadModal';
 import NewListModal from '../Lists/NewListModal';
 import UnifiedLeadsTable from './UnifiedLeadsTable';
+import { useSyncQueue } from '../../hooks/useSyncQueue';
 
 const ESTADOS_DISPONIBLES = [
   { id: '', label: 'Todos los estados' },
@@ -80,12 +81,43 @@ export default function LeadsDirectoryView({ activeTenantWorkspace = '', onOpenL
   const [selectedLeadIds, setSelectedLeadIds] = useState(new Set());
 
   // Acciones en curso
-  const [syncingLeadIds, setSyncingLeadIds] = useState(new Set());
   const [resolvingEmailIds, setResolvingEmailIds] = useState(new Set());
-  const [isBatchSyncing, setIsBatchSyncing] = useState(false);
   const [isBatchResolvingEmail, setIsBatchResolvingEmail] = useState(false);
   const [isBatchDeleting, setIsBatchDeleting] = useState(false);
   const [isSyncingConnections, setIsSyncingConnections] = useState(false);
+
+  // Cola serializada de sincronización con LinkedIn
+  const handleLeadUpdatedFromQueue = useCallback((updatedLead) => {
+    setLeads((prev) =>
+      prev.map((l) =>
+        l.id === updatedLead.id
+          ? {
+              ...l,
+              cargo_actual: updatedLead.cargo_actual,
+              institucion_actual: updatedLead.institucion_actual,
+              ubicacion: updatedLead.ubicacion,
+              nombre: updatedLead.nombre,
+              grado_red: updatedLead.grado_red,
+              estado: updatedLead.estado,
+              updated_at: updatedLead.updated_at
+            }
+          : l
+      )
+    );
+  }, []);
+
+  const {
+    syncingLeadIds,
+    activeSyncingLeadId,
+    syncQueue,
+    syncQueueStats,
+    isProcessing: isBatchSyncing,
+    enqueueLead,
+    enqueueLeads,
+    cancelQueue
+  } = useSyncQueue({
+    onLeadUpdated: handleLeadUpdatedFromQueue
+  });
 
   // Modales
   const [selectedLeadForModal, setSelectedLeadForModal] = useState(null);
@@ -178,32 +210,11 @@ export default function LeadsDirectoryView({ activeTenantWorkspace = '', onOpenL
     }
   }
 
-  // Sincronizar un lead individual en vivo
-  async function handleSyncSingleLead(e, lead) {
+  // Sincronizar un lead individual en vivo (encolado)
+  function handleSyncSingleLead(e, lead) {
     if (e && e.stopPropagation) e.stopPropagation();
     if (!lead?.id) return;
-    try {
-      setSyncingLeadIds(prev => new Set(prev).add(lead.id));
-      const res = await syncLeadWithLinkedIn(lead.id);
-      if (res && res.lead) {
-        setLeads(prev => prev.map(l => l.id === lead.id ? {
-          ...l,
-          cargo_actual: res.lead.cargo_actual,
-          institucion_actual: res.lead.institucion_actual,
-          ubicacion: res.lead.ubicacion,
-          nombre: res.lead.nombre,
-          updated_at: res.lead.updated_at
-        } : l));
-      }
-    } catch (err) {
-      alert(`Error sincronizando prospecto: ${err.message}`);
-    } finally {
-      setSyncingLeadIds(prev => {
-        const next = new Set(prev);
-        next.delete(lead.id);
-        return next;
-      });
-    }
+    enqueueLead(lead);
   }
 
   // Resolver correo de un lead individual (1er grado o Cascada Waterfall)
@@ -251,29 +262,16 @@ export default function LeadsDirectoryView({ activeTenantWorkspace = '', onOpenL
     }
   }
 
-  // Sincronizar en lote los leads seleccionados
-  async function handleBatchSync() {
+  // Sincronizar en lote los leads seleccionados (encolado)
+  function handleBatchSync() {
     if (selectedLeadIds.size === 0) return;
-    const idsToSync = Array.from(selectedLeadIds);
-    setIsBatchSyncing(true);
-    let successCount = 0;
-    for (const id of idsToSync) {
-      try {
-        setSyncingLeadIds(prev => new Set(prev).add(id));
-        await syncLeadWithLinkedIn(id);
-        successCount++;
-      } catch (e) {
-        console.error(`Error sincronizando lead ${id}:`, e);
-      } finally {
-        setSyncingLeadIds(prev => {
-          const next = new Set(prev);
-          next.delete(id);
-          return next;
-        });
-      }
-    }
-    setIsBatchSyncing(false);
-    await loadLeads();
+    const leadsToSync = [];
+    selectedLeadIds.forEach((id) => {
+      const found = leads.find((l) => l.id === id);
+      leadsToSync.push(found || { id, nombre: 'Prospecto' });
+    });
+    enqueueLeads(leadsToSync);
+    setSelectedLeadIds(new Set()); // Limpiar selección una vez encolados
   }
 
   // Sincronizar en bloque las conexiones aceptadas desde LinkedIn
@@ -478,11 +476,11 @@ export default function LeadsDirectoryView({ activeTenantWorkspace = '', onOpenL
               <button
                 type="button"
                 onClick={handleBatchSync}
-                disabled={isBatchSyncing}
-                className="flex items-center gap-1 px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium transition cursor-pointer disabled:opacity-40"
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-300 border border-emerald-500/30 text-xs font-medium transition cursor-pointer"
+                title="Encolar sincronización de prospectos seleccionados con LinkedIn"
               >
-                <RefreshCw className={`w-3 h-3 ${isBatchSyncing ? 'animate-spin' : ''}`} />
-                <span>Sincronizar</span>
+                <RefreshCw className="w-3 h-3 text-emerald-400" />
+                <span>Sincronizar seleccionados ({selectedLeadIds.size})</span>
               </button>
 
               <button
@@ -667,6 +665,38 @@ export default function LeadsDirectoryView({ activeTenantWorkspace = '', onOpenL
         </div>
       </div>
 
+      {/* Banner de progreso de la cola de sincronización */}
+      {(syncQueue.length > 0 || activeSyncingLeadId) && (
+        <div className="flex items-center justify-between px-4 py-2.5 bg-emerald-950/40 border border-emerald-500/30 rounded-xl text-xs text-emerald-200 animate-fadeIn mb-3">
+          <div className="flex items-center gap-2.5">
+            <RefreshCw className="w-4 h-4 animate-spin text-emerald-400" />
+            <div>
+              <span className="font-semibold text-emerald-300">Cola de sincronización:</span>{' '}
+              {activeSyncingLeadId ? (
+                <span>
+                  Sincronizando <span className="text-white font-medium">
+                    {leads.find((l) => l.id === activeSyncingLeadId)?.nombre || syncQueue[0]?.nombre || 'prospecto'}
+                  </span> en vivo...
+                </span>
+              ) : (
+                'Preparando siguiente prospecto...'
+              )}
+              <span className="text-zinc-400 ml-2">
+                ({syncQueueStats.completed} completados, {syncQueue.length + (activeSyncingLeadId ? 1 : 0)} pendientes
+                {syncQueueStats.failed > 0 ? `, ${syncQueueStats.failed} fallidos` : ''})
+              </span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={cancelQueue}
+            className="px-2.5 py-1 rounded bg-red-950/40 hover:bg-red-950/70 text-red-300 border border-red-500/20 text-xs font-medium transition cursor-pointer"
+          >
+            Cancelar cola ({syncQueue.length + (activeSyncingLeadId ? 1 : 0)})
+          </button>
+        </div>
+      )}
+
       {/* 3. Tabla principal unificada de prospectos */}
       <UnifiedLeadsTable
         data={leads}
@@ -680,8 +710,9 @@ export default function LeadsDirectoryView({ activeTenantWorkspace = '', onOpenL
         onResolveEmail={handleResolveSingleLeadEmail}
         onDeleteLead={handleDeleteSingleLead}
         syncingLeadIds={syncingLeadIds}
+        activeSyncingLeadId={activeSyncingLeadId}
         resolvingLeadIds={resolvingEmailIds}
-        actionInProgress={isBatchDeleting || isBatchSyncing || isBatchResolvingEmail}
+        actionInProgress={isBatchDeleting || isBatchResolvingEmail}
         onFilterByList={(listId) => {
           setSelectedListId(listId);
           setCurrentPage(1);

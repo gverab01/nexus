@@ -1,5 +1,5 @@
 // Vista de gestión de listas de prospectos, inspección profunda de leads y secuencias conectadas
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   ListFilter, 
   Plus, 
@@ -48,6 +48,7 @@ import {
 import NewListModal from './NewListModal';
 import LeadModal from '../Prospects/LeadModal';
 import UnifiedLeadsTable from '../Prospects/UnifiedLeadsTable';
+import { useSyncQueue } from '../../hooks/useSyncQueue';
 
 export default function ListsView({ 
   onSelectSequence, 
@@ -74,12 +75,52 @@ export default function ListsView({
   const [loadingSequences, setLoadingSequences] = useState(false);
   const [selectedSeqToConnect, setSelectedSeqToConnect] = useState('');
   const [actionInProgress, setActionInProgress] = useState(false);
-  const [syncingLeadIds, setSyncingLeadIds] = useState(new Set());
   const [selectedLeadIds, setSelectedLeadIds] = useState(new Set());
   const [resolvingLeadIds, setResolvingLeadIds] = useState(new Set());
   const [isBatchResolvingEmail, setIsBatchResolvingEmail] = useState(false);
   const [extractionLoading, setExtractionLoading] = useState(false);
   const [deletingListId, setDeletingListId] = useState(null);
+
+  // Cola serializada de sincronización con LinkedIn
+  const handleLeadUpdatedInList = useCallback((updated) => {
+    setListDetail((prev) => {
+      if (!prev) return null;
+      const updatedLeads = (prev.leads || []).map((l) =>
+        l.id === updated.id
+          ? {
+              ...l,
+              ...updated,
+              cargo: updated.cargo_actual || updated.cargo_titular || l.cargo,
+              cargo_actual: updated.cargo_actual || l.cargo_actual,
+              cargo_titular: updated.cargo_titular || l.cargo_titular,
+              institucion: updated.institucion_actual || l.institucion,
+              institucion_actual: updated.institucion_actual || l.institucion_actual,
+              ubicacion: updated.ubicacion || l.ubicacion,
+              grado_red: updated.grado_red || l.grado_red,
+            }
+          : l
+      );
+      return {
+        ...prev,
+        leads: updatedLeads,
+        leads_extraidos: updatedLeads.filter(
+          (l) => l.cargo_actual && l.cargo_actual !== 'No determinado'
+        ).length,
+      };
+    });
+  }, []);
+
+  const {
+    syncingLeadIds,
+    activeSyncingLeadId,
+    syncQueue,
+    syncQueueStats,
+    enqueueLead,
+    enqueueLeads,
+    cancelQueue
+  } = useSyncQueue({
+    onLeadUpdated: handleLeadUpdatedInList
+  });
 
   useEffect(() => {
     loadLists();
@@ -267,50 +308,21 @@ export default function ListsView({
     });
   }
 
-  async function handleSyncSingleLead(lead, e) {
-    if (e) e.stopPropagation();
+  function handleSyncSingleLead(lead, e) {
+    if (e && e.stopPropagation) e.stopPropagation();
     if (!lead?.id) return;
+    enqueueLead(lead);
+  }
 
-    try {
-      setSyncingLeadIds((prev) => new Set(prev).add(lead.id));
-      const res = await syncLeadWithLinkedIn(lead.id);
-      if (res && res.lead) {
-        const updated = res.lead;
-        setListDetail((prev) => {
-          if (!prev) return null;
-          const updatedLeads = (prev.leads || []).map((l) =>
-            l.id === lead.id
-              ? {
-                  ...l,
-                  ...updated,
-                  cargo: updated.cargo_actual || updated.cargo_titular || l.cargo,
-                  cargo_actual: updated.cargo_actual || l.cargo_actual,
-                  cargo_titular: updated.cargo_titular || l.cargo_titular,
-                  institucion: updated.institucion_actual || l.institucion,
-                  institucion_actual: updated.institucion_actual || l.institucion_actual,
-                  ubicacion: updated.ubicacion || l.ubicacion,
-                  grado_red: updated.grado_red || l.grado_red,
-                }
-              : l
-          );
-          return {
-            ...prev,
-            leads: updatedLeads,
-            leads_extraidos: updatedLeads.filter(
-              (l) => l.cargo_actual && l.cargo_actual !== 'No determinado'
-            ).length,
-          };
-        });
-      }
-    } catch (err) {
-      alert(`Error sincronizando lead con LinkedIn: ${err.message}`);
-    } finally {
-      setSyncingLeadIds((prev) => {
-        const next = new Set(prev);
-        next.delete(lead.id);
-        return next;
-      });
-    }
+  function handleBatchSync() {
+    if (selectedLeadIds.size === 0 || !listDetail) return;
+    const leadsToSync = [];
+    selectedLeadIds.forEach((id) => {
+      const found = (listDetail.leads || []).find((l) => l.id === id);
+      leadsToSync.push(found || { id, nombre: 'Prospecto' });
+    });
+    enqueueLeads(leadsToSync);
+    setSelectedLeadIds(new Set());
   }
 
   function handleToggleLead(leadId) {
@@ -864,13 +876,23 @@ export default function ListsView({
               <div className="flex items-center gap-2">
                 <button
                   type="button"
+                  onClick={handleBatchSync}
+                  className="flex items-center gap-1.5 px-3 py-1 rounded-md bg-emerald-950/70 hover:bg-emerald-900/80 text-emerald-300 border border-emerald-500/30 text-xs font-medium transition cursor-pointer"
+                  title="Encolar sincronización de prospectos seleccionados con LinkedIn"
+                >
+                  <RefreshCw className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Sincronizar seleccionados ({selectedLeadIds.size})</span>
+                </button>
+
+                <button
+                  type="button"
                   onClick={handleBatchResolveEmails}
                   disabled={isBatchResolvingEmail}
-                  className="flex items-center gap-1.5 px-3 py-1 rounded-md bg-emerald-950/70 hover:bg-emerald-900/80 text-emerald-300 border border-emerald-500/30 text-xs font-medium transition cursor-pointer disabled:opacity-50"
+                  className="flex items-center gap-1.5 px-3 py-1 rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium transition cursor-pointer disabled:opacity-50"
                   title="Resolver correos corporativos en cascada"
                 >
                   <Mail className={`w-3.5 h-3.5 ${isBatchResolvingEmail ? 'animate-spin' : ''}`} />
-                  <span>{isBatchResolvingEmail ? 'Resolviendo...' : 'Resolver Emails en Cascada'}</span>
+                  <span>{isBatchResolvingEmail ? 'Resolviendo...' : 'Resolver Emails'}</span>
                 </button>
 
                 <button
@@ -881,6 +903,38 @@ export default function ListsView({
                   Deseleccionar
                 </button>
               </div>
+            </div>
+          )}
+
+          {/* Banner de progreso de la cola de sincronización */}
+          {(syncQueue.length > 0 || activeSyncingLeadId) && (
+            <div className="flex items-center justify-between px-4 py-2.5 bg-emerald-950/40 border border-emerald-500/30 rounded-xl text-xs text-emerald-200 animate-fadeIn mb-3">
+              <div className="flex items-center gap-2.5">
+                <RefreshCw className="w-4 h-4 animate-spin text-emerald-400" />
+                <div>
+                  <span className="font-semibold text-emerald-300">Cola de sincronización:</span>{' '}
+                  {activeSyncingLeadId ? (
+                    <span>
+                      Sincronizando <span className="text-white font-medium">
+                        {(listDetail?.leads || []).find((l) => l.id === activeSyncingLeadId)?.nombre || syncQueue[0]?.nombre || 'prospecto'}
+                      </span> en vivo...
+                    </span>
+                  ) : (
+                    'Preparando siguiente prospecto...'
+                  )}
+                  <span className="text-zinc-400 ml-2">
+                    ({syncQueueStats.completed} completados, {syncQueue.length + (activeSyncingLeadId ? 1 : 0)} pendientes
+                    {syncQueueStats.failed > 0 ? `, ${syncQueueStats.failed} fallidos` : ''})
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={cancelQueue}
+                className="px-2.5 py-1 rounded bg-red-950/40 hover:bg-red-950/70 text-red-300 border border-red-500/20 text-xs font-medium transition cursor-pointer"
+              >
+                Cancelar cola ({syncQueue.length + (activeSyncingLeadId ? 1 : 0)})
+              </button>
             </div>
           )}
 
@@ -897,6 +951,7 @@ export default function ListsView({
             onResolveEmail={handleResolveSingleEmail}
             onRemoveFromList={(e, lead) => handleRemoveLead(lead.id, lead.nombre, e)}
             syncingLeadIds={syncingLeadIds}
+            activeSyncingLeadId={activeSyncingLeadId}
             resolvingLeadIds={resolvingLeadIds}
             actionInProgress={actionInProgress}
             clientSidePagination={true}

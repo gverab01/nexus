@@ -71,6 +71,7 @@ export default function UnifiedLeadsTable({
   onRemoveFromList,
   // Estados de carga por lead
   syncingLeadIds = new Set(),
+  activeSyncingLeadId = null,
   resolvingLeadIds = new Set(),
   actionInProgress = false,
   // Filtros interactivos por clic en badge
@@ -651,6 +652,8 @@ export default function UnifiedLeadsTable({
                 const isSelected = selectedLeadIds ? selectedLeadIds.has(leadId) : false;
                 const initials = getLeadInitials(lead.nombre);
                 const isSyncingThis = syncingLeadIds.has(leadId);
+                const isActiveSyncing = activeSyncingLeadId === leadId;
+                const isQueuedSyncing = isSyncingThis && !isActiveSyncing;
                 const isResolvingThis = resolvingLeadIds.has(leadId);
 
                 // Normalización de datos del lead
@@ -938,13 +941,27 @@ export default function UnifiedLeadsTable({
                                     onClick={(e) => onSyncLinkedIn(e, lead)}
                                     disabled={isSyncingThis || actionInProgress}
                                     className={`p-1.5 rounded transition cursor-pointer disabled:opacity-50 ${
-                                      isSyncingThis
-                                        ? 'bg-emerald-950/50 text-emerald-400 border border-emerald-500/30'
+                                      isActiveSyncing
+                                        ? 'bg-emerald-950/70 text-emerald-400 border border-emerald-500/40 shadow-sm shadow-emerald-950/50'
+                                        : isQueuedSyncing
+                                        ? 'bg-amber-950/40 text-amber-400 border border-amber-500/30'
                                         : 'hover:bg-emerald-950/30 text-zinc-400 hover:text-emerald-400'
                                     }`}
-                                    title="Sincronizar cargo actual y empresa con LinkedIn"
+                                    title={
+                                      isActiveSyncing
+                                        ? 'Sincronizando con LinkedIn en vivo...'
+                                        : isQueuedSyncing
+                                        ? 'En cola de sincronización...'
+                                        : 'Sincronizar cargo actual y empresa con LinkedIn'
+                                    }
                                   >
-                                    <RefreshCw className={`w-3.5 h-3.5 ${isSyncingThis ? 'animate-spin text-emerald-400' : ''}`} />
+                                    {isActiveSyncing ? (
+                                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-emerald-400" />
+                                    ) : isQueuedSyncing ? (
+                                      <Clock className="w-3.5 h-3.5 animate-pulse text-amber-400" />
+                                    ) : (
+                                      <RefreshCw className="w-3.5 h-3.5" />
+                                    )}
                                   </button>
                                 )}
 

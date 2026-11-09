@@ -365,3 +365,4 @@ export default function ScheduleConfigurator({ scheduleData, onUpdated }) {
     </div>
   );
 }
+

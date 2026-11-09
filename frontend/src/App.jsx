@@ -16,6 +16,7 @@ import LeadsDirectoryView from './components/Prospects/LeadsDirectoryView';
 import AntibanSettingsModal from './components/AntibanSettingsModal';
 import AntibanSettingsView from './components/Antiban/AntibanSettingsView';
 import DashboardView from './components/Dashboard/DashboardView';
+import MatchingView from './components/Matching/MatchingView';
 import { 
   fetchLeadLists, 
   fetchSequences, 
@@ -30,7 +31,8 @@ import {
   fetchAgencyFinances,
   fetchProspects,
   loginZoho,
-  logoutZoho
+  logoutZoho,
+  fetchMatchingStats
 } from './services/api';
 
 function getDefaultTabForUser(user) {
@@ -56,6 +58,7 @@ export default function App() {
   const [totalLeadsCount, setTotalLeadsCount] = useState(0);
   const [listsCount, setListsCount] = useState(0);
   const [sequencesCount, setSequencesCount] = useState(0);
+  const [matchingCount, setMatchingCount] = useState(0);
   const [logsCount, setLogsCount] = useState(0);
   const [isExtracting, setIsExtracting] = useState(false);
   const [linkedinSessionActive, setLinkedinSessionActive] = useState(false);
@@ -79,6 +82,12 @@ export default function App() {
   // Verificación inicial de sesión al arrancar la app
   useEffect(() => {
     initAuth();
+
+    function handleUnauthorized() {
+      setCurrentUser(null);
+    }
+    window.addEventListener('nexus:unauthorized', handleUnauthorized);
+    return () => window.removeEventListener('nexus:unauthorized', handleUnauthorized);
   }, []);
 
   async function initAuth() {
@@ -109,14 +118,9 @@ export default function App() {
     }
   }, [currentUser]);
 
-  // Control de acceso a la vista de auditoría de actividad (solo roles administrativos en workspace)
+  // Sincronización de rol inicial
   useEffect(() => {
-    const isAdmin = Boolean(currentUser && ['SUPER_ADMIN', 'AGENCY_ADMIN', 'COMPANY_ADMIN'].includes(currentUser.rol));
-    if (currentUser?.rol === 'SUPER_ADMIN' && activeTab === 'logs') {
-      setActiveTab('super_admin');
-    } else if (currentUser && !isAdmin && activeTab === 'logs') {
-      setActiveTab('prospectos');
-    }
+    // Mantener la navegación coherente según rol
   }, [currentUser, activeTab]);
 
   async function loadAgencyClients() {
@@ -202,17 +206,19 @@ export default function App() {
   async function refreshCounters() {
     try {
       const isAdmin = Boolean(currentUser && ['SUPER_ADMIN', 'AGENCY_ADMIN', 'COMPANY_ADMIN'].includes(currentUser.rol));
-      const [lists, seqs, logStats, leadsData] = await Promise.all([
+      const [lists, seqs, logStats, leadsData, matchStats] = await Promise.all([
         fetchLeadLists(selectedWorkspaceTenantId).catch(() => []),
         fetchSequences(selectedWorkspaceTenantId).catch(() => []),
-        isAdmin ? fetchLogStats({ silent: true }).catch(() => ({})) : Promise.resolve({ total_logs: 0, is_extracting_now: false }),
+        fetchLogStats({ silent: true }).catch(() => ({ total_logs: 0, is_extracting_now: false })),
         fetchProspects({ limit: 1, tenantId: selectedWorkspaceTenantId }).catch(() => ({ total: 0 })),
+        fetchMatchingStats(selectedWorkspaceTenantId).catch(() => ({ matches_listos: 0, pendientes: 0 })),
       ]);
 
       setListsCount(lists.length);
       setSequencesCount(seqs.length);
       setLogsCount(logStats?.total_logs || 0);
       setTotalLeadsCount(leadsData?.total || 0);
+      setMatchingCount((matchStats?.matches_listos || 0) + (matchStats?.pendientes || 0));
       setIsExtracting(Boolean(logStats?.is_extracting_now));
     } catch (err) {
       console.error('Error actualizando contadores:', err);
@@ -346,6 +352,7 @@ export default function App() {
         totalLeadsCount={totalLeadsCount}
         listsCount={listsCount}
         sequencesCount={sequencesCount}
+        matchingCount={matchingCount}
         logsCount={logsCount}
         isExtracting={isExtracting}
         linkedinSessionActive={linkedinSessionActive}
@@ -387,6 +394,7 @@ export default function App() {
           selectedWorkspaceName={selectedWorkspaceName}
           onSelectWorkspace={handleSelectWorkspace}
           onExitWorkspace={handleExitWorkspace}
+          onNavigateToTab={handleTabChange}
         />
         <div className="flex-1 overflow-y-auto min-w-0">
           <main className="p-6 space-y-6 max-w-7xl w-full mx-auto">
@@ -438,6 +446,12 @@ export default function App() {
             />
           )}
 
+          {activeTab === 'matching' && (
+            <MatchingView 
+              activeTenantWorkspace={selectedWorkspaceTenantId}
+            />
+          )}
+
           {activeTab === 'listas' && (
             <ListsView 
               onSelectSequence={(seq) => {
@@ -469,11 +483,11 @@ export default function App() {
           )}
 
           {activeTab === 'antiban' && (
-            <AntibanSettingsView />
+            <AntibanSettingsView activeTenantWorkspace={selectedWorkspaceTenantId} />
           )}
 
-          {activeTab === 'logs' && ['SUPER_ADMIN', 'AGENCY_ADMIN', 'COMPANY_ADMIN'].includes(currentUser?.rol) && (
-            <ActivityLogsView onStatusChange={handleLogStatusChange} />
+          {activeTab === 'logs' && (
+            <ActivityLogsView onStatusChange={handleLogStatusChange} currentUser={currentUser} />
           )}
         </main>
         </div>

@@ -15,6 +15,7 @@ import sequence_engine
 import lists_engine
 import auth_service
 import task_dispatcher
+import task_queue_service
 import whatsapp_safety_engine
 import zoho_browser_service
 import zoho_bridge_service
@@ -92,6 +93,10 @@ def startup_event():
         start_periodic_delay_sweeper()
     except Exception as e:
         print(f"[Startup] Error iniciando promotor periódico de esperas: {e}")
+    try:
+        task_queue_service.start_periodic_queue_runner()
+    except Exception as e:
+        print(f"[Startup] Error iniciando despachador de cola central: {e}")
 
 @app.get("/")
 def read_root():
@@ -2081,6 +2086,151 @@ def stop_list_extraction_endpoint(
     return res
 
 # ==========================================
+# STAGING & MATCHING ENGINE (LINKEDIN DISCOVERY)
+# ==========================================
+import matching_engine
+
+@app.get("/api/matching/leads")
+def list_matching_leads_endpoint(
+    estado: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    limit: int = Query(50),
+    offset: int = Query(0),
+    tenant_id: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+    x_session_token: Optional[str] = Header(None, alias="X-Session-Token")
+):
+    """Lista los prospectos del buzón de matching y staging con filtros."""
+    caller = _get_current_user(authorization, x_session_token)
+    tenants = _resolve_permitted_tenants(caller, tenant_id)
+    target_tenant = tenants[0]
+    return matching_engine.list_staging_leads(
+        tenant_id=target_tenant,
+        estado=estado,
+        search=search,
+        limit=limit,
+        offset=offset
+    )
+
+@app.get("/api/matching/stats")
+def get_matching_stats_endpoint(
+    tenant_id: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+    x_session_token: Optional[str] = Header(None, alias="X-Session-Token")
+):
+    """Retorna métricas consolidadas del buzón de matching."""
+    caller = _get_current_user(authorization, x_session_token)
+    tenants = _resolve_permitted_tenants(caller, tenant_id)
+    target_tenant = tenants[0]
+    return matching_engine.get_staging_stats(tenant_id=target_tenant)
+
+@app.post("/api/matching/leads")
+def create_manual_staging_lead_endpoint(
+    datos: Dict[str, Any],
+    authorization: Optional[str] = Header(None),
+    x_session_token: Optional[str] = Header(None, alias="X-Session-Token")
+):
+    """Crea un nuevo prospecto manual uno a uno en el buzón de staging."""
+    caller = _get_current_user(authorization, x_session_token)
+    tenants = _resolve_permitted_tenants(caller, datos.get("tenant_id"))
+    target_tenant = tenants[0]
+    try:
+        lead = matching_engine.create_staging_lead(datos, tenant_id=target_tenant)
+        if datos.get("buscar_inmediato"):
+            match_res = matching_engine.search_candidate_for_staging_lead(lead["id"])
+            lead = matching_engine.get_staging_lead(lead["id"]) or lead
+            lead["match_resultado"] = match_res
+        return lead
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/matching/leads/importar-lote")
+def import_batch_staging_leads_endpoint(
+    datos: Dict[str, Any],
+    authorization: Optional[str] = Header(None),
+    x_session_token: Optional[str] = Header(None, alias="X-Session-Token")
+):
+    """Importa prospectos en bloque desde CSV o estructura JSON al staging."""
+    caller = _get_current_user(authorization, x_session_token)
+    tenants = _resolve_permitted_tenants(caller, datos.get("tenant_id"))
+    target_tenant = tenants[0]
+    leads_list = datos.get("leads") or []
+    origen = datos.get("origen", "CSV")
+    return matching_engine.batch_create_staging_leads(leads_list, tenant_id=target_tenant, origen=origen)
+
+@app.post("/api/matching/leads/importar-zoho")
+def import_zoho_staging_leads_endpoint(
+    datos: Optional[Dict[str, Any]] = None,
+    authorization: Optional[str] = Header(None),
+    x_session_token: Optional[str] = Header(None, alias="X-Session-Token")
+):
+    """Consulta e importa contactos desde Zoho CRM al buzón de matching."""
+    caller = _get_current_user(authorization, x_session_token)
+    t_req = datos.get("tenant_id") if datos else None
+    tenants = _resolve_permitted_tenants(caller, t_req)
+    target_tenant = tenants[0]
+    max_rec = datos.get("max_registros", 50) if datos else 50
+    return matching_engine.import_from_zoho_to_staging(tenant_id=target_tenant, max_records=max_rec)
+
+@app.post("/api/matching/leads/{staging_id}/buscar")
+def search_candidate_staging_endpoint(
+    staging_id: str,
+    authorization: Optional[str] = Header(None),
+    x_session_token: Optional[str] = Header(None, alias="X-Session-Token")
+):
+    """Dispara la búsqueda de perfiles coincidentes en LinkedIn para un prospecto."""
+    caller = _get_current_user(authorization, x_session_token)
+    return matching_engine.search_candidate_for_staging_lead(staging_id)
+
+@app.post("/api/matching/leads/{staging_id}/confirmar")
+def confirm_staging_lead_endpoint(
+    staging_id: str,
+    datos: Dict[str, Any],
+    authorization: Optional[str] = Header(None),
+    x_session_token: Optional[str] = Header(None, alias="X-Session-Token")
+):
+    """Valida y promueve un prospecto del staging al Directorio oficial o a una lista."""
+    caller = _get_current_user(authorization, x_session_token)
+    tenants = _resolve_permitted_tenants(caller, datos.get("tenant_id"))
+    target_tenant = tenants[0]
+    try:
+        return matching_engine.confirm_and_promote_staging_lead(
+            staging_id=staging_id,
+            target_list_id=datos.get("lista_id"),
+            custom_url=datos.get("perfil_url"),
+            custom_nombre=datos.get("nombre"),
+            custom_cargo=datos.get("cargo_actual"),
+            custom_institucion=datos.get("institucion_actual"),
+            tenant_id=target_tenant
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/matching/leads/{staging_id}/descartar")
+def discard_staging_lead_endpoint(
+    staging_id: str,
+    datos: Optional[Dict[str, Any]] = None,
+    authorization: Optional[str] = Header(None),
+    x_session_token: Optional[str] = Header(None, alias="X-Session-Token")
+):
+    """Marca como descartado un prospecto de staging."""
+    caller = _get_current_user(authorization, x_session_token)
+    motivo = (datos.get("motivo") or "") if datos else ""
+    res = matching_engine.discard_staging_lead(staging_id, motivo=motivo)
+    return {"ok": res, "staging_id": staging_id}
+
+@app.delete("/api/matching/leads/{staging_id}")
+def delete_staging_lead_endpoint(
+    staging_id: str,
+    authorization: Optional[str] = Header(None),
+    x_session_token: Optional[str] = Header(None, alias="X-Session-Token")
+):
+    """Elimina definitivamente un prospecto del buzón de staging."""
+    caller = _get_current_user(authorization, x_session_token)
+    res = matching_engine.delete_staging_lead(staging_id)
+    return {"ok": res, "staging_id": staging_id}
+
+# ==========================================
 # ACTIVITY LOGS & AUDIT
 # ==========================================
 @app.get("/api/logs")
@@ -2096,7 +2246,7 @@ def get_logs_endpoint(
 ):
     """Retorna los registros de actividad cronológicos del sistema con opciones de filtrado."""
     caller = _get_current_user(authorization, x_session_token)
-    tenants = _require_tenant_admin(caller, tenant_id)
+    tenants = _resolve_permitted_tenants(caller, tenant_id)
     if caller.get("rol") == "SUPER_ADMIN" and not tenant_id:
         import logger_service
         logs = logger_service.get_logs(limit=limit, module=module, level=level, search=search, since_id=since_id)
@@ -2142,7 +2292,7 @@ def get_log_stats_endpoint(
 ):
     """Retorna estadísticas agregadas de los registros y eventos del sistema."""
     caller = _get_current_user(authorization, x_session_token)
-    tenants = _require_tenant_admin(caller, tenant_id)
+    tenants = _resolve_permitted_tenants(caller, tenant_id)
     if caller.get("rol") == "SUPER_ADMIN" and not tenant_id:
         import logger_service
         return logger_service.get_log_stats()
@@ -2182,6 +2332,37 @@ def clear_logs_endpoint(
     import logger_service
     logger_service.clear_logs()
     return {"status": "ok", "message": "Logs eliminados correctamente"}
+
+# ==========================================
+# REGISTRO HISTÓRICO DE SUCESOS (OPERADOR & ADMIN)
+# ==========================================
+@app.get("/api/secuencias/sucesos")
+def get_secuencias_sucesos_endpoint(
+    limit: int = Query(50, description="Cantidad máxima de sucesos a retornar"),
+    offset: int = Query(0, description="Desplazamiento para paginación"),
+    tipo_evento: Optional[str] = Query(None, description="Filtro por tipo de evento"),
+    search: Optional[str] = Query(None, description="Término de búsqueda por prospecto, cargo o detalle"),
+    secuencia_id: Optional[str] = Query(None, description="Filtrar por ID de secuencia"),
+    tenant_id: Optional[str] = Query(None, description="Filtrar sucesos por tenant autorizado"),
+    authorization: Optional[str] = Header(None),
+    x_session_token: Optional[str] = Header(None, alias="X-Session-Token")
+):
+    """
+    Retorna el historial cronológico de sucesos y acciones ejecutadas por las secuencias
+    (Visitas, Invitaciones, Mensajes, Esperas, Sincronizaciones).
+    Accesible para el rol OPERADOR, COMPANY_ADMIN, AGENCY_ADMIN y SUPER_ADMIN.
+    """
+    caller = _get_current_user(authorization, x_session_token)
+    tenants = _resolve_permitted_tenants(caller, tenant_id)
+    import sequence_engine
+    return sequence_engine.get_sequence_events(
+        tenant_ids=tenants,
+        limit=limit,
+        offset=offset,
+        tipo_evento=tipo_evento,
+        search=search,
+        secuencia_id=secuencia_id
+    )
 
 def _extract_raw_session_token(
     authorization: Optional[str] = None,
@@ -2455,6 +2636,160 @@ def report_task_result(
     if not res.get("ok", True) and res.get("http_status"):
         raise HTTPException(status_code=res["http_status"], detail=res.get("error", "Error procesando reporte de tarea."))
     return res
+
+
+# ==============================================================================
+# COLA CENTRALIZADA DE TAREAS Y POLÍTICAS DE RITMO ANTIBAN (TASK-QUEUE-04)
+# ==============================================================================
+
+class EnqueueBatchRequest(BaseModel):
+    tipo_tarea: str
+    lead_ids: List[str]
+    payload: Optional[Dict[str, Any]] = None
+    prioridad: Optional[int] = 5
+
+class UpdatePolicyRequest(BaseModel):
+    limite_diario: Optional[int] = None
+    pausa_min_seg: Optional[int] = None
+    pausa_max_seg: Optional[int] = None
+    activo: Optional[bool] = None
+
+class CancelTasksRequest(BaseModel):
+    task_ids: Optional[List[str]] = None
+
+@app.get("/api/cola-tareas/estado")
+def get_queue_status_endpoint(
+    tenant_id: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+    x_session_token: Optional[str] = Header(None, alias="X-Session-Token")
+):
+    """Retorna métricas ejecutivas de la cola persistente para el tenant activo."""
+    caller = _get_current_user(authorization, x_session_token)
+    tenants = _resolve_permitted_tenants(caller, tenant_id)
+    target_tenant = tenants[0]
+    return task_queue_service.get_queue_summary(target_tenant)
+
+@app.get("/api/cola-tareas/politicas")
+def get_queue_policies_endpoint(
+    tenant_id: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+    x_session_token: Optional[str] = Header(None, alias="X-Session-Token")
+):
+    """Retorna las políticas de ritmo y límites diarios de cada acción para el tenant."""
+    caller = _get_current_user(authorization, x_session_token)
+    tenants = _resolve_permitted_tenants(caller, tenant_id)
+    target_tenant = tenants[0]
+    policies = task_queue_service.get_tenant_policies(target_tenant)
+    return {"ok": True, "politicas": policies}
+
+@app.put("/api/cola-tareas/politicas/{tipo_tarea}")
+def update_queue_policy_endpoint(
+    tipo_tarea: str,
+    req: UpdatePolicyRequest,
+    tenant_id: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+    x_session_token: Optional[str] = Header(None, alias="X-Session-Token")
+):
+    """Actualiza los límites diarios y pausas mínimas/máximas de una acción en el tenant."""
+    caller = _get_current_user(authorization, x_session_token)
+    tenants = _resolve_permitted_tenants(caller, tenant_id)
+    target_tenant = tenants[0]
+    try:
+        updated = task_queue_service.update_tenant_policy(
+            target_tenant,
+            tipo_tarea=tipo_tarea,
+            limite_diario=req.limite_diario,
+            pausa_min_seg=req.pausa_min_seg,
+            pausa_max_seg=req.pausa_max_seg,
+            activo=req.activo
+        )
+        return {"ok": True, "politica": updated}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/cola-tareas/politicas/restaurar")
+def reset_queue_policies_endpoint(
+    tenant_id: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+    x_session_token: Optional[str] = Header(None, alias="X-Session-Token")
+):
+    """Restaura las políticas de ritmo a los valores recomendados antiban (50 inv/día)."""
+    caller = _get_current_user(authorization, x_session_token)
+    tenants = _resolve_permitted_tenants(caller, tenant_id)
+    target_tenant = tenants[0]
+    restored = task_queue_service.reset_tenant_policies_to_recommended(target_tenant)
+    return {"ok": True, "politicas": restored}
+
+@app.post("/api/cola-tareas/encolar")
+def enqueue_tasks_endpoint(
+    req: EnqueueBatchRequest,
+    tenant_id: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+    x_session_token: Optional[str] = Header(None, alias="X-Session-Token")
+):
+    """Encola un lote de acciones para prospectos en PostgreSQL con cálculo de jitter estocástico."""
+    caller = _get_current_user(authorization, x_session_token)
+    tenants = _resolve_permitted_tenants(caller, tenant_id)
+    target_tenant = tenants[0]
+    try:
+        res = task_queue_service.enqueue_batch_actions(
+            target_tenant,
+            tipo_tarea=req.tipo_tarea,
+            lead_ids=req.lead_ids,
+            payload=req.payload,
+            prioridad=req.prioridad or 5
+        )
+        return {"ok": True, **res}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/cola-tareas/cancelar")
+def cancel_queue_tasks_endpoint(
+    req: Optional[CancelTasksRequest] = None,
+    tenant_id: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+    x_session_token: Optional[str] = Header(None, alias="X-Session-Token")
+):
+    """Cancela tareas pendientes en la cola central de PostgreSQL."""
+    caller = _get_current_user(authorization, x_session_token)
+    tenants = _resolve_permitted_tenants(caller, tenant_id)
+    target_tenant = tenants[0]
+    ids = req.task_ids if req else None
+    count = task_queue_service.cancel_pending_tasks(target_tenant, task_ids=ids)
+    return {"ok": True, "canceladas": count}
+
+@app.get("/api/cola-tareas/items")
+def get_queue_items_endpoint(
+    tenant_id: Optional[str] = Query(None),
+    estado: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    authorization: Optional[str] = Header(None),
+    x_session_token: Optional[str] = Header(None, alias="X-Session-Token")
+):
+    """Lista las tareas de la cola central paginadas para inspección."""
+    caller = _get_current_user(authorization, x_session_token)
+    tenants = _resolve_permitted_tenants(caller, tenant_id)
+    target_tenant = tenants[0]
+    with get_db(tenant_id=target_tenant) as conn:
+        cursor = conn.cursor()
+        where_clauses = ["c.tenant_id = %s"]
+        params = [target_tenant]
+        if estado:
+            where_clauses.append("c.estado = %s")
+            params.append(estado)
+        where_sql = " AND ".join(where_clauses)
+        cursor.execute(f"""
+            SELECT c.*, l.nombre as lead_nombre, l.cargo_actual as lead_cargo, l.institucion_actual as lead_empresa
+            FROM cola_tareas_central c
+            LEFT JOIN leads l ON l.id = c.lead_id
+            WHERE {where_sql}
+            ORDER BY c.programado_para ASC, c.prioridad ASC
+            LIMIT %s OFFSET %s;
+        """, params + [limit, offset])
+        items = [dict(r) for r in cursor.fetchall()]
+        return {"ok": True, "items": items}
+
 
 
 # ==============================================================================

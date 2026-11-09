@@ -10,24 +10,23 @@ export default function NewSequenceModal({ onClose, onCreated, activeTenantWorks
   const [submitting, setSubmitting] = useState(false);
   const inputRef = useRef(null);
 
-  // Foco automático garantizado y manejo de tecla Escape
+  // Foco automático limpio al montar y manejo de tecla Escape
   useEffect(() => {
     function handleKeyDown(e) {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape' && onClose) onClose();
     }
     window.addEventListener('keydown', handleKeyDown);
     const timer = setTimeout(() => {
       if (inputRef.current) {
         inputRef.current.focus();
-        inputRef.current.select();
       }
-    }, 60);
+    }, 50);
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       clearTimeout(timer);
     };
-  }, [onClose]);
+  }, []);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -58,11 +57,11 @@ export default function NewSequenceModal({ onClose, onCreated, activeTenantWorks
 
   return (
     <div 
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4 font-sans select-none"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4 font-sans"
       onClick={onClose}
     >
       <div 
-        className="w-full max-w-md bg-[#121316] border border-white/[0.08] rounded-xl shadow-2xl overflow-hidden relative z-10 select-text"
+        className="w-full max-w-md bg-[#121316] border border-white/[0.08] rounded-xl shadow-2xl overflow-hidden relative z-10"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="p-4 border-b border-white/[0.06] flex items-center justify-between">
@@ -94,12 +93,11 @@ export default function NewSequenceModal({ onClose, onCreated, activeTenantWorks
               id="sequence-nombre-input"
               name="nombre"
               type="text"
-              autoFocus
               required
               value={nombre}
               onChange={(e) => setNombre(e.target.value)}
               placeholder="Ej: Prospección Gerentes de Operaciones 2026"
-              className="w-full bg-[#0D0E12] border border-white/[0.08] px-3 py-2 rounded-md text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-zinc-500 font-sans cursor-text select-text transition"
+              className="w-full bg-[#0D0E12] border border-white/[0.08] px-3 py-2 rounded-md text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-zinc-500 font-sans cursor-text transition"
             />
           </div>
 

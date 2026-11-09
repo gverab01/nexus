@@ -1059,7 +1059,10 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
             "cargo_actual": c_act or "Profesional",
             "institucion_actual": inst or "",
             "ubicacion": loc,
-            "grado_red": grado
+            "grado_red": grado,
+            "email": res_data.get("email"),
+            "telefono": res_data.get("phone"),
+            "similar_profiles": res_data.get("similar_profiles") or []
         }
 
     # Si Electron está activo pero llegamos aquí, no evaluar JS para evitar error 403 (C-01)
@@ -1513,7 +1516,10 @@ def enrich_lead_from_live_profile(profile_url: str) -> Dict[str, Any]:
             "cargo_actual": c_act or "Profesional",
             "institucion_actual": inst or "",
             "ubicacion": loc,
-            "grado_red": grado
+            "grado_red": grado,
+            "email": res_data.get("email"),
+            "telefono": res_data.get("phone"),
+            "similar_profiles": res_data.get("similar_profiles") or []
         }
     return {"ok": False, "error": res.get("error", "No se pudo leer el DOM del perfil") if isinstance(res, dict) else str(res)}
 

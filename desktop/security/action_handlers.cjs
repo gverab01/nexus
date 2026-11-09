@@ -1405,6 +1405,54 @@ async function handleLinkedInEnrichProfile(win, params = {}) {
           }
         }
 
+        // Extracción de datos de contacto visibles en la página
+        let directEmail = null;
+        let directPhone = null;
+        try {
+          const mailto = document.querySelector('a[href^="mailto:"]');
+          if (mailto) {
+            directEmail = (mailto.getAttribute('href') || '').replace(/^mailto:/i, '').split('?')[0].trim();
+          }
+          const tel = document.querySelector('a[href^="tel:"]');
+          if (tel) {
+            directPhone = (tel.getAttribute('href') || '').replace(/^tel:/i, '').split('?')[0].trim();
+          }
+        } catch (e) {}
+
+        // Extracción de perfiles afines (Personas que también vieron / Más perfiles para ti)
+        const similarProfiles = [];
+        try {
+          const asideCards = Array.from(document.querySelectorAll('aside section, div[data-view-name="profile-component-entity"], aside ul li, .aside-section-container ul li, [data-member-id]'));
+          const seenUrls = new Set();
+          
+          for (const card of asideCards) {
+            const link = card.querySelector('a[href*="/in/"]');
+            if (!link) continue;
+            let rawHref = (link.getAttribute('href') || '').split('?')[0].trim();
+            if (!rawHref.startsWith('http')) {
+              rawHref = 'https://www.linkedin.com' + (rawHref.startsWith('/') ? '' : '/') + rawHref;
+            }
+            if (rawHref.includes('/in/') && !seenUrls.has(rawHref) && !rawHref.includes(cleanUrl)) {
+              seenUrls.add(rawHref);
+              
+              const spans = Array.from(card.querySelectorAll('span[aria-hidden="true"], p, div.entity-result__primary-subtitle'));
+              const validTexts = spans.map(s => (s.innerText || '').trim()).filter(t => t.length > 1 && !t.includes('1er') && !t.includes('2do') && !t.includes('Conectar') && !t.includes('Seguir'));
+              
+              const pName = validTexts[0] || (link.innerText || '').split('\n')[0].trim();
+              const pHeadline = validTexts[1] || '';
+              
+              if (pName && pName.length > 2 && pName !== name && !pName.toLowerCase().includes('linkedin')) {
+                similarProfiles.push({
+                  nombre: pName,
+                  cargo_titular: pHeadline,
+                  perfil_url: rawHref
+                });
+              }
+            }
+            if (similarProfiles.length >= 8) break;
+          }
+        } catch (e) {}
+
         return {
           ok: true,
           nombre: name,
@@ -1413,7 +1461,10 @@ async function handleLinkedInEnrichProfile(win, params = {}) {
           expCompany: expCompany,
           location: location,
           grado: grado,
-          url: url
+          url: url,
+          email: directEmail,
+          phone: directPhone,
+          similar_profiles: similarProfiles
         };
       } catch (e) {
         return { ok: false, error: e.message };

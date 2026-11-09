@@ -31,7 +31,8 @@ import {
   importSelectedProspects,
   syncAcceptedConnections,
   resolveLeadEmail,
-  batchResolveLeadEmails
+  batchResolveLeadEmails,
+  enqueueCentralTasks
 } from '../../services/api';
 import LeadModal from './LeadModal';
 import NewListModal from '../Lists/NewListModal';
@@ -215,11 +216,18 @@ export default function LeadsDirectoryView({ activeTenantWorkspace = '', onOpenL
     }
   }
 
-  // Sincronizar un lead individual en vivo (encolado)
-  function handleSyncSingleLead(e, lead) {
+  // Sincronizar un lead individual en vivo (encolado persistente en PostgreSQL)
+  async function handleSyncSingleLead(e, lead) {
     if (e && e.stopPropagation) e.stopPropagation();
     if (!lead?.id) return;
-    enqueueLead(lead);
+    try {
+      const res = await enqueueCentralTasks('LI_ENRICH', [lead.id], {}, 5, activeTenantWorkspace);
+      if (res && res.ok) {
+        alert(`Prospecto '${lead.nombre || 'Lead'}' encolado en la base de datos PostgreSQL.\nSe sincronizará en segundo plano con descansos antibaneo.`);
+      }
+    } catch (err) {
+      alert(`Error encolando tarea: ${err.message}`);
+    }
   }
 
   // Resolver correo de un lead individual (1er grado o Cascada Waterfall)
@@ -267,16 +275,19 @@ export default function LeadsDirectoryView({ activeTenantWorkspace = '', onOpenL
     }
   }
 
-  // Sincronizar en lote los leads seleccionados (encolado)
-  function handleBatchSync() {
+  // Sincronizar en lote los leads seleccionados (encolado persistente en PostgreSQL)
+  async function handleBatchSync() {
     if (selectedLeadIds.size === 0) return;
-    const leadsToSync = [];
-    selectedLeadIds.forEach((id) => {
-      const found = leads.find((l) => l.id === id);
-      leadsToSync.push(found || { id, nombre: 'Prospecto' });
-    });
-    enqueueLeads(leadsToSync);
-    setSelectedLeadIds(new Set()); // Limpiar selección una vez encolados
+    const ids = Array.from(selectedLeadIds);
+    try {
+      const res = await enqueueCentralTasks('LI_ENRICH', ids, {}, 5, activeTenantWorkspace);
+      if (res && res.ok) {
+        alert(`${res.enqueued || ids.length} prospectos encolados en la base de datos PostgreSQL.\nSe sincronizarán en segundo plano a ritmo seguro con pausas antibaneo (${res.skipped || 0} omitidos por ya estar en cola).\n\nPuedes navegar libremente entre pestañas.`);
+      }
+      setSelectedLeadIds(new Set());
+    } catch (err) {
+      alert(`Error encolando lote de prospectos: ${err.message}`);
+    }
   }
 
   // Sincronizar en bloque las conexiones aceptadas desde LinkedIn

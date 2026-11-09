@@ -3,11 +3,14 @@ import time
 import secrets
 import hashlib
 import json
+import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List, Tuple
 import urllib.request
 import urllib.error
 from database import get_db
+
+logger = logging.getLogger("auth_service")
 
 # ==============================================================================
 # MOTOR DE AUTENTICACIÓN, TENANTS Y SUSCRIPCIONES (NexusReach Pro)
@@ -20,12 +23,55 @@ DB_VALIDATION_CACHE_SECONDS = 30     # 30 segundos de micro-caché para revalida
 ACTIVE_SESSIONS: Dict[str, Dict[str, Any]] = {}
 SESIONES_ACTIVAS = ACTIVE_SESSIONS
 
+def _init_session_table():
+    """Garantiza la existencia de la tabla sesiones_activas para tolerancia a reinicios."""
+    import database
+    try:
+        with database.tenant_context_scope(is_super_admin=True):
+            with get_db() as c:
+                cur = c.cursor()
+                if getattr(database, "IS_POSTGRES", False):
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS sesiones_activas (
+                            token VARCHAR(128) PRIMARY KEY,
+                            usuario_id VARCHAR(64) NOT NULL,
+                            tenant_id VARCHAR(64),
+                            perfil_json TEXT NOT NULL,
+                            expires_at DOUBLE PRECISION NOT NULL,
+                            created_at VARCHAR(64) NOT NULL
+                        )
+                    """)
+                else:
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS sesiones_activas (
+                            token TEXT PRIMARY KEY,
+                            usuario_id TEXT NOT NULL,
+                            tenant_id TEXT,
+                            perfil_json TEXT NOT NULL,
+                            expires_at REAL NOT NULL,
+                            created_at TEXT NOT NULL
+                        )
+                    """)
+    except Exception as e:
+        logger.warning(f"No se pudo inicializar tabla sesiones_activas: {e}")
+
+_init_session_table()
+
 def purge_expired_sessions():
-    """Elimina sesiones inactivas o vencidas para evitar fugas de memoria."""
+    """Elimina sesiones inactivas o vencidas para evitar fugas de memoria y registros huérfanos."""
     now_ts = time.time()
     expired_keys = [k for k, v in ACTIVE_SESSIONS.items() if v.get("expires_at", 0) < now_ts]
     for k in expired_keys:
         ACTIVE_SESSIONS.pop(k, None)
+    
+    # Purgar en base de datos
+    import database
+    try:
+        with database.tenant_context_scope(is_super_admin=True):
+            with get_db() as c:
+                c.cursor().execute("DELETE FROM sesiones_activas WHERE expires_at < ?", (now_ts,))
+    except Exception:
+        pass
 
 def hash_password(password: str, salt: Optional[str] = None) -> Tuple[str, str]:
     """Genera hash seguro PBKDF2 con salt criptográfico de 16 bytes."""
@@ -427,6 +473,26 @@ def authenticate_user(email: str, password: str, remote_url: Optional[str] = Non
     purge_expired_sessions()
     ACTIVE_SESSIONS[token] = profile
 
+    # Persistir sesión activa en BD para tolerancia total a reinicios del servidor
+    try:
+        with database.tenant_context_scope(is_super_admin=True):
+            with get_db() as c:
+                cur = c.cursor()
+                if getattr(database, "IS_POSTGRES", False):
+                    cur.execute("""
+                        INSERT INTO sesiones_activas (token, usuario_id, tenant_id, perfil_json, expires_at, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT (token) DO UPDATE 
+                        SET perfil_json = EXCLUDED.perfil_json, expires_at = EXCLUDED.expires_at
+                    """, (token, user["id"], tenant_id, json.dumps(profile), profile["expires_at"], now_iso))
+                else:
+                    cur.execute("""
+                        INSERT OR REPLACE INTO sesiones_activas (token, usuario_id, tenant_id, perfil_json, expires_at, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (token, user["id"], tenant_id, json.dumps(profile), profile["expires_at"], now_iso))
+    except Exception as e:
+        logger.warning(f"Error persistiendo sesión activa en BD: {e}")
+
     # Registrar último login y audit log
     if getattr(database, "IS_POSTGRES", False):
         with database.tenant_context_scope(tenant_id=tenant_id, is_super_admin=is_sa):
@@ -453,7 +519,28 @@ def authenticate_user(email: str, password: str, remote_url: Optional[str] = Non
 
 def verify_token(token: str) -> Optional[Dict[str, Any]]:
     """Valida un token en memoria y revalida la vigencia de la suscripción con micro-caché."""
-    if not token or token not in ACTIVE_SESSIONS:
+    if not token:
+        return None
+    
+    # Si no está en memoria RAM, buscar en la tabla sesiones_activas (resiliente a reinicios)
+    if token not in ACTIVE_SESSIONS:
+        import database
+        try:
+            with database.tenant_context_scope(is_super_admin=True):
+                with get_db() as c:
+                    cur = c.cursor()
+                    cur.execute("SELECT perfil_json, expires_at FROM sesiones_activas WHERE token = ?", (token,))
+                    row = cur.fetchone()
+                    if row:
+                        p_json, exp_at = row[0], float(row[1])
+                        if exp_at > time.time():
+                            ACTIVE_SESSIONS[token] = json.loads(p_json)
+                        else:
+                            cur.execute("DELETE FROM sesiones_activas WHERE token = ?", (token,))
+        except Exception as e:
+            logger.warning(f"Error restaurando sesión activa de BD: {e}")
+
+    if token not in ACTIVE_SESSIONS:
         return None
     
     session_data = ACTIVE_SESSIONS[token]
@@ -502,11 +589,22 @@ def verify_token(token: str) -> Optional[Dict[str, Any]]:
         return _do_revalidation()
 
 def logout_user(token: str) -> bool:
-    """Elimina el token de la memoria."""
+    """Elimina el token de la memoria y de la tabla de sesiones activas."""
+    existed = False
     if token in ACTIVE_SESSIONS:
         del ACTIVE_SESSIONS[token]
-        return True
-    return False
+        existed = True
+    import database
+    try:
+        with database.tenant_context_scope(is_super_admin=True):
+            with get_db() as c:
+                cur = c.cursor()
+                cur.execute("DELETE FROM sesiones_activas WHERE token = ?", (token,))
+                if cur.rowcount > 0:
+                    existed = True
+    except Exception:
+        pass
+    return existed
 
 # ==============================================================================
 # OPERACIONES DE GESTIÓN PARA SUPER ADMIN (Gabriel)

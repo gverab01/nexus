@@ -7,9 +7,28 @@ from contextlib import contextmanager
 
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 except ImportError:
     pass
+
+# Carga de respaldo de .env para entornos sin python-dotenv
+def _load_env_fallback():
+    env_file = os.path.join(os.path.dirname(__file__), ".env")
+    if os.path.exists(env_file):
+        try:
+            with open(env_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        v = v.strip().strip("'\"")
+                        if k and k not in os.environ:
+                            os.environ[k] = v
+        except Exception:
+            pass
+
+_load_env_fallback()
 
 DEFAULT_SQLITE_PATH = os.path.join(os.path.dirname(__file__), "leads.db")
 
@@ -1062,6 +1081,35 @@ def init_db():
         );
         """)
 
+        # 36. Buzón de Staging y Matching de Prospectos (LinkedIn Discovery & Validation)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS staging_leads (
+            id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL DEFAULT 'ten_superadmin',
+            nombre TEXT NOT NULL,
+            institucion TEXT,
+            email TEXT,
+            cargo_declarado TEXT,
+            telefono TEXT,
+            origen TEXT DEFAULT 'MANUAL',
+            zoho_id TEXT,
+            estado TEXT DEFAULT 'PENDIENTE',
+            candidato_nombre TEXT,
+            candidato_url TEXT,
+            candidato_titular TEXT,
+            candidato_cargo TEXT,
+            candidato_institucion TEXT,
+            candidato_ubicacion TEXT,
+            candidato_grado TEXT,
+            score_coincidencia INTEGER DEFAULT 0,
+            candidatos_alternativos_json TEXT DEFAULT '[]',
+            notas TEXT,
+            promovido_lead_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        """)
+
         # Migrar tablas existentes para incorporar tenant_id y columnas requeridas
         migrate_multitenant_schema(cursor)
 
@@ -1089,6 +1137,8 @@ def init_db():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_leads_lista ON leads_en_lista(lista_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_secuencia_listas ON secuencia_listas(secuencia_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON system_logs(timestamp);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_staging_tenant_estado ON staging_leads(tenant_id, estado);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_staging_email ON staging_leads(email);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_logs_module ON system_logs(module);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_tenant_ts ON audit_logs(tenant_id, timestamp);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_leads_zoho_id ON leads(zoho_id);")

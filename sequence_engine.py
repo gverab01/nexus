@@ -744,43 +744,175 @@ def _process_step_atom(item: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     # =========================================================================
-    # ACTION 1: VISITAR_PERFIL (LinkedIn)
+    # ACTION 1: VISITAR_PERFIL (LinkedIn) - Sincronización y Radar 3-en-1
     # =========================================================================
     if action_type == "VISITAR_PERFIL":
         profile_url = item.get("perfil_url")
         if not profile_url:
             return {"status": "error", "mensaje": f"El lead {lead_name} no tiene URL de LinkedIn."}
 
-        # Open profile in BrowserOS
-        nav_res = browser_service.open_profile_in_browseros(profile_url, lead_name)
-        if nav_res.get("status") != "ok":
-            return {"status": "error", "mensaje": f"Fallo al abrir en BrowserOS: {nav_res.get('detail')}"}
-
-        # Simulate human reading (stochastic scroll and pause)
-        t_min = params.get("tiempo_lectura_min_seg", 5)
-        t_max = params.get("tiempo_lectura_max_seg", 10)
+        # Simulación de lectura humana biológica estocástica
+        t_min = params.get("tiempo_lectura_min_seg", 6)
+        t_max = params.get("tiempo_lectura_max_seg", 12)
         human_pause = random.uniform(t_min, t_max)
-        
-        # Biological scroll script in BrowserOS
-        scroll_script = """
-            (() => {
-                window.scrollBy({ top: 400 + Math.floor(Math.random() * 350), behavior: 'smooth' });
-                return { scrolled: true, scrollY: window.scrollY };
-            })()
-        """
-        browser_service._call_mcp_evaluate(scroll_script)
-        time.sleep(min(human_pause, 4)) # Controlled pause
 
-        # Update database
+        # 1. Enriquecimiento e inspección del perfil en vivo
+        import extractor_engine
+        enrich_res = {}
+        try:
+            enrich_res = extractor_engine.enrich_lead_from_live_profile(profile_url)
+        except Exception as e:
+            safety_engine.log_security_event(
+                "SEQUENCES_WARNING",
+                f"No se pudo sincronizar en vivo el perfil de {lead_name}: {e}",
+                {"lead_id": lead_id, "url": profile_url},
+                lead_id=lead_id
+            )
+
+        # Fallback de navegación en BrowserOS si Electron no estaba activo
+        if not enrich_res.get("ok") and browser_service.is_browseros_running():
+            nav_res = browser_service.open_profile_in_browseros(profile_url, lead_name)
+            if nav_res.get("status") == "ok":
+                scroll_script = """
+                    (() => {
+                        window.scrollBy({ top: 400 + Math.floor(Math.random() * 350), behavior: 'smooth' });
+                        return { scrolled: true, scrollY: window.scrollY };
+                    })()
+                """
+                browser_service._call_mcp_evaluate(scroll_script)
+
+        # Pausa humana estocástica
+        time.sleep(min(human_pause, 4))
+
+        # 2. Extracción de contacto directo u overlay si no vino en enrich_res
+        contact_email = enrich_res.get("email")
+        contact_phone = enrich_res.get("telefono")
+        if (not contact_email or not contact_phone) and browser_service.is_electron_running():
+            try:
+                c_data = browser_service.extract_contact_info_from_electron(profile_url)
+                if c_data.get("success") and c_data.get("result"):
+                    res_c = c_data["result"]
+                    if not contact_email and res_c.get("email"):
+                        contact_email = res_c["email"]
+                    if not contact_phone and res_c.get("phone"):
+                        contact_phone = res_c["phone"]
+            except Exception:
+                pass
+
+        # 3. Actualización de datos del lead actual en base de datos
         with get_db() as conn:
             cursor = conn.cursor()
-            cursor.execute("UPDATE leads SET estado = 'PERFIL_VISITADO', fecha_visita = ?, updated_at = ? WHERE id = ?", (now_iso, now_iso, lead_id))
+            
             cursor.execute("""
-                INSERT INTO historial_actividades (lead_id, tipo_evento, descripcion, timestamp)
-                VALUES (?, 'VISITA_PERFIL_SECUENCIA', ?, ?)
-            """, (lead_id, f"Perfil visitado automáticamente según secuencia '{item['secuencia_nombre']}'.", now_iso))
+                SELECT cargo_titular, cargo_actual, institucion_actual, ubicacion, grado_red, email, telefono, tenant_id 
+                FROM leads WHERE id = ?
+            """, (lead_id,))
+            current_row = cursor.fetchone()
+            curr_titular = current_row[0] if current_row else ""
+            curr_cargo = current_row[1] if current_row else ""
+            curr_inst = current_row[2] if current_row else ""
+            curr_ubic = current_row[3] if current_row else ""
+            curr_grado = current_row[4] if current_row else "2º"
+            curr_email = current_row[5] if current_row else ""
+            curr_tel = current_row[6] if current_row else ""
+            curr_tenant = current_row[7] if current_row and len(current_row) > 7 else "ten_superadmin"
 
-        execution_result["detalle"] = f"Perfil visitado con scroll y lectura de {round(human_pause, 1)}s."
+            nuevo_nombre = enrich_res.get("nombre") if enrich_res.get("ok") and enrich_res.get("nombre") else lead_name
+            nuevo_titular = enrich_res.get("cargo_titular") or curr_titular
+            nuevo_cargo = enrich_res.get("cargo_actual") or curr_cargo
+            nueva_inst = enrich_res.get("institucion_actual") or curr_inst
+            nueva_ubic = enrich_res.get("ubicacion") or curr_ubic
+            nuevo_grado = enrich_res.get("grado_red") or curr_grado
+            final_email = contact_email or curr_email
+            final_tel = contact_phone or curr_tel
+            
+            nuevo_estado = "CONECTADO" if nuevo_grado == "1º" else "PERFIL_VISITADO"
+            nueva_fecha_conn = now_iso if (nuevo_grado == "1º" and not item.get("fecha_conexion")) else item.get("fecha_conexion")
+
+            cursor.execute("""
+                UPDATE leads 
+                SET nombre = ?,
+                    cargo_titular = ?,
+                    cargo_actual = ?,
+                    institucion_actual = ?,
+                    ubicacion = ?,
+                    grado_red = ?,
+                    email = ?,
+                    telefono = ?,
+                    estado = ?,
+                    fecha_conexion = ?,
+                    fecha_visita = ?,
+                    updated_at = ?
+                WHERE id = ?
+            """, (nuevo_nombre, nuevo_titular, nuevo_cargo, nueva_inst, nueva_ubic, nuevo_grado, final_email, final_tel, nuevo_estado, nueva_fecha_conn, now_iso, now_iso, lead_id))
+
+            # 4. Radar de Prospectos Afines ("Personas que también vieron")
+            similar_profiles = enrich_res.get("similar_profiles") or []
+            discovered_count = 0
+            if similar_profiles:
+                for sim in similar_profiles:
+                    sim_url = sim.get("perfil_url")
+                    sim_nom = sim.get("nombre")
+                    sim_tit = sim.get("cargo_titular")
+                    if not sim_url or not sim_nom:
+                        continue
+                    clean_sim_url = sim_url.split("?")[0].rstrip("/") + "/"
+                    
+                    # Evitar duplicados
+                    cursor.execute("SELECT id FROM leads WHERE perfil_url LIKE ? OR perfil_url = ?", (f"{clean_sim_url}%", sim_url))
+                    if cursor.fetchone():
+                        continue
+                    
+                    sim_id = f"lead-radar-{int(time.time())}-{random.randint(1000, 9999)}"
+                    sim_cargo, sim_inst = extractor_engine.parse_cargo_and_institucion(sim_tit, default_institucion=nueva_inst, location=nueva_ubic)
+                    
+                    cursor.execute("""
+                        INSERT INTO leads (
+                            id, nombre, cargo_titular, cargo_actual, institucion_actual,
+                            ubicacion, grado_red, perfil_url, estado, tags, notas,
+                            tenant_id, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, '2º', ?, 'EXTRAIDO', ?, ?, ?, ?, ?)
+                    """, (
+                        sim_id, sim_nom, sim_tit, sim_cargo or "Profesional", sim_inst or nueva_inst,
+                        nueva_ubic or "Chile", sim_url,
+                        json.dumps(["RADAR_VISITA"]),
+                        f"Descubierto automáticamente por radar de visitas en el perfil de {lead_name}.",
+                        curr_tenant or "ten_superadmin", now_iso, now_iso
+                    ))
+
+                    # Vincular directamente a la lista dedicada '🎯 Radar: Descubiertos por Visita'
+                    try:
+                        import lists_engine
+                        radar_list_id = lists_engine.get_or_create_radar_list(tenant_id=curr_tenant)
+                        cursor.execute("""
+                            INSERT OR IGNORE INTO leads_en_lista (id, lista_id, lead_id, created_at)
+                            VALUES (?, ?, ?, ?)
+                        """, (f"ll-{radar_list_id}-{sim_id}", radar_list_id, sim_id, now_iso))
+                    except Exception:
+                        pass
+
+                    discovered_count += 1
+
+            detalle_visita = f"Perfil visitado ({round(human_pause, 1)}s) y sincronizado: {nuevo_cargo} en {nueva_inst}."
+            if contact_email or contact_phone:
+                detalle_visita += f" [Contacto detectado: {contact_email or ''} {contact_phone or ''}]."
+            if discovered_count > 0:
+                detalle_visita += f" [🎯 Radar: {discovered_count} contactos afines descubiertos]."
+
+            meta_visita = json.dumps({
+                "secuencia_id": sequence_id,
+                "secuencia_nombre": item.get("secuencia_nombre"),
+                "paso_id": current_step_id,
+                "cargo": nuevo_cargo,
+                "institucion": nueva_inst,
+                "radar_descubiertos": discovered_count
+            })
+            cursor.execute("""
+                INSERT INTO historial_actividades (lead_id, tipo_evento, descripcion, metadata_json, timestamp)
+                VALUES (?, 'VISITA_PERFIL_SECUENCIA', ?, ?, ?)
+            """, (lead_id, detalle_visita, meta_visita, now_iso))
+
+        execution_result["detalle"] = detalle_visita
 
     # =========================================================================
     # ACTION 2: ESPERAR (Stochastic delay hours/days)
@@ -790,6 +922,19 @@ def _process_step_atom(item: Dict[str, Any]) -> Dict[str, Any]:
         hours_with_jitter = round(max(0.1, hours * random.uniform(0.92, 1.08)), 2)
         next_hour = now + timedelta(hours=hours_with_jitter)
         execution_result["detalle"] = f"Pausa programada de {hours_with_jitter} horas hasta {next_hour.strftime('%Y-%m-%d %H:%M')}."
+        with get_db() as conn:
+            cursor = conn.cursor()
+            meta_espera = json.dumps({
+                "secuencia_id": sequence_id,
+                "secuencia_nombre": item.get("secuencia_nombre"),
+                "paso_id": current_step_id,
+                "horas": hours_with_jitter,
+                "proxima_ejecucion": next_hour.isoformat()
+            })
+            cursor.execute("""
+                INSERT INTO historial_actividades (lead_id, tipo_evento, descripcion, metadata_json, timestamp)
+                VALUES (?, 'PAUSA_PROGRAMADA', ?, ?, ?)
+            """, (lead_id, execution_result["detalle"], meta_espera, now_iso))
 
     # =========================================================================
     # ACTION 3: ENVIAR_INVITACION (With/Without Spintax Note)
@@ -1190,6 +1335,27 @@ def _process_step_atom(item: Dict[str, Any]) -> Dict[str, Any]:
             sequence_id
         ))
 
+    # Registrar evento de éxito/detalle en el sistema de auditoría y telemetría
+    logger_service.log_event(
+        "SUCCESS" if execution_result.get("ok", True) else "ERROR",
+        "SEQUENCES",
+        f"Acción '{action_type}' ejecutada para {lead_name}: {execution_result.get('detalle', 'Completado')}",
+        {
+            "lead_id": lead_id,
+            "lead_nombre": lead_name,
+            "institucion": item.get("institucion_actual"),
+            "secuencia_id": sequence_id,
+            "secuencia_nombre": item.get("secuencia_nombre"),
+            "paso_id": current_step_id,
+            "accion": action_type,
+            "detalle": execution_result.get("detalle"),
+            "proximo_paso_id": next_step_id,
+            "proxima_ejecucion": next_date_iso,
+            "secuencia_completada": is_sequence_end
+        },
+        lead_id=lead_id
+    )
+
     return {
         "status": "ok",
         "lead": {
@@ -1353,6 +1519,116 @@ def promote_expired_delays(sequence_id: Optional[str] = None, tenant_id: Optiona
         conn.commit()
 
     return promoted_count
+
+
+def get_sequence_events(
+    tenant_ids: List[str],
+    limit: int = 50,
+    offset: int = 0,
+    tipo_evento: Optional[str] = None,
+    search: Optional[str] = None,
+    secuencia_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Retorna el registro histórico cronológico de acciones y sucesos ejecutados por secuencias
+    para los prospectos de los tenants autorizados (Operador, Admin, Superadmin).
+    """
+    if not tenant_ids:
+        return {"sucesos": [], "total": 0, "stats": {}}
+
+    placeholders = ", ".join(["?"] * len(tenant_ids))
+    params: List[Any] = list(tenant_ids)
+
+    where_clauses = [f"l.tenant_id IN ({placeholders})"]
+
+    if tipo_evento and tipo_evento != "ALL":
+        where_clauses.append("h.tipo_evento = ?")
+        params.append(tipo_evento)
+
+    if search:
+        s = f"%{search.strip()}%"
+        where_clauses.append("(l.nombre LIKE ? OR l.institucion_actual LIKE ? OR h.descripcion LIKE ?)")
+        params.extend([s, s, s])
+
+    where_sql = " AND ".join(where_clauses)
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        # Conteo total filtrado
+        count_sql = f"""
+            SELECT COUNT(*) as total
+            FROM historial_actividades h
+            JOIN leads l ON h.lead_id = l.id
+            WHERE {where_sql}
+        """
+        cursor.execute(count_sql, params)
+        count_row = cursor.fetchone()
+        total = count_row["total"] if isinstance(count_row, dict) else (count_row[0] if count_row else 0)
+
+        # Estadísticas agrupadas por tipo de evento para el workspace
+        stats_sql = f"""
+            SELECT h.tipo_evento, COUNT(*) as count
+            FROM historial_actividades h
+            JOIN leads l ON h.lead_id = l.id
+            WHERE l.tenant_id IN ({placeholders})
+            GROUP BY h.tipo_evento
+        """
+        cursor.execute(stats_sql, list(tenant_ids))
+        stats_rows = cursor.fetchall()
+        by_type = {}
+        for r in stats_rows:
+            t = r["tipo_evento"] if isinstance(r, dict) else r[0]
+            c = r["count"] if isinstance(r, dict) else r[1]
+            by_type[t] = c
+
+        # Consulta paginada con datos del prospecto
+        data_sql = f"""
+            SELECT 
+                h.id,
+                h.lead_id,
+                h.tipo_evento,
+                h.descripcion,
+                h.metadata_json,
+                h.timestamp,
+                l.nombre as lead_nombre,
+                l.cargo_titular,
+                l.cargo_actual,
+                l.institucion_actual,
+                l.perfil_url,
+                l.email,
+                l.telefono,
+                l.estado as lead_estado
+            FROM historial_actividades h
+            JOIN leads l ON h.lead_id = l.id
+            WHERE {where_sql}
+            ORDER BY h.id DESC
+            LIMIT ? OFFSET ?
+        """
+        query_params = list(params) + [limit, offset]
+        cursor.execute(data_sql, query_params)
+        rows = cursor.fetchall()
+
+        sucesos = []
+        for r in rows:
+            item = dict(r)
+            try:
+                item["metadata"] = json.loads(item.get("metadata_json") or "{}")
+            except Exception:
+                item["metadata"] = {}
+            sucesos.append(item)
+
+        return {
+            "sucesos": sucesos,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "stats": {
+                "total_sucesos": total,
+                "por_tipo": by_type
+            }
+        }
+
 
 
 

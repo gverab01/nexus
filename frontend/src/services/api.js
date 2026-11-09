@@ -108,6 +108,14 @@ async function request(endpoint, options = {}) {
       } else if (errorData.mensaje) {
         message = errorData.mensaje;
       }
+
+      if (response.status === 401) {
+        clearSessionToken();
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('nexus:unauthorized', { detail: { endpoint, status: 401 } }));
+        }
+      }
+
       const err = new Error(message);
       err.data = errorData;
       err.status = response.status;
@@ -115,7 +123,7 @@ async function request(endpoint, options = {}) {
     }
     return await response.json();
   } catch (error) {
-    if (!options?.silent) {
+    if (!options?.silent && error?.status !== 401) {
       console.error(`[API Error] en ${endpoint}:`, error);
     }
     throw error;
@@ -555,6 +563,68 @@ export async function syncAcceptedConnections(tenantId = '') {
   return await request(`/leads/sincronizar-conexiones${query}`, { method: 'POST' });
 }
 
+// ==========================================
+// COLA CENTRALIZADA DE TAREAS Y POLÍTICAS ANTIBAN
+// ==========================================
+
+export async function fetchQueueStatus(tenantId = '') {
+  const query = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : '';
+  return await request(`/cola-tareas/estado${query}`);
+}
+
+export async function fetchQueuePolicies(tenantId = '') {
+  const query = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : '';
+  const res = await request(`/cola-tareas/politicas${query}`);
+  return res.politicas || [];
+}
+
+export async function updateQueuePolicy(tipoTarea, policyData, tenantId = '') {
+  const query = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : '';
+  return await request(`/cola-tareas/politicas/${encodeURIComponent(tipoTarea)}${query}`, {
+    method: 'PUT',
+    body: JSON.stringify(policyData)
+  });
+}
+
+export async function resetQueuePoliciesToRecommended(tenantId = '') {
+  const query = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : '';
+  const res = await request(`/cola-tareas/politicas/restaurar${query}`, {
+    method: 'POST'
+  });
+  return res.politicas || [];
+}
+
+export async function enqueueCentralTasks(tipoTarea, leadIds, payload = {}, prioridad = 5, tenantId = '') {
+  const query = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : '';
+  return await request(`/cola-tareas/encolar${query}`, {
+    method: 'POST',
+    body: JSON.stringify({
+      tipo_tarea: tipoTarea,
+      lead_ids: leadIds,
+      payload,
+      prioridad
+    })
+  });
+}
+
+export async function cancelCentralQueueTasks(taskIds = null, tenantId = '') {
+  const query = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : '';
+  return await request(`/cola-tareas/cancelar${query}`, {
+    method: 'POST',
+    body: JSON.stringify({ task_ids: taskIds })
+  });
+}
+
+export async function fetchCentralQueueItems(params = {}, tenantId = '') {
+  const q = new URLSearchParams();
+  if (tenantId) q.append('tenant_id', tenantId);
+  if (params.estado) q.append('estado', params.estado);
+  if (params.limit) q.append('limit', params.limit);
+  if (params.offset) q.append('offset', params.offset);
+  const res = await request(`/cola-tareas/items?${q.toString()}`);
+  return res.items || [];
+}
+
 
 // ==========================================
 // LISTAS DE LEADS (AUDIENCIAS)
@@ -904,6 +974,19 @@ export async function clearLogs() {
   });
 }
 
+export async function fetchSequenceEvents(params = {}) {
+  // Obtiene el historial cronológico de sucesos y acciones realizadas por secuencias
+  const searchParams = new URLSearchParams();
+  if (params.limit) searchParams.append('limit', String(params.limit));
+  if (params.offset) searchParams.append('offset', String(params.offset));
+  if (params.tipo_evento) searchParams.append('tipo_evento', params.tipo_evento);
+  if (params.search) searchParams.append('search', params.search);
+  if (params.secuencia_id) searchParams.append('secuencia_id', params.secuencia_id);
+
+  const query = searchParams.toString() ? `?${searchParams.toString()}` : '';
+  return await request(`/secuencias/sucesos${query}`);
+}
+
 // ==========================================
 // TASK DISPATCHER (HYBRID ARCHITECTURE)
 // ==========================================
@@ -950,6 +1033,73 @@ export async function fetchDashboardMetrics({ tenantId = '', sequenceId = '', li
   const query = params.toString() ? `?${params.toString()}` : '';
   return await request(`/dashboard/metricas${query}`);
 }
+
+// ==========================================
+// BUZÓN DE STAGING & MATCHING LINKEDIN
+// ==========================================
+
+export async function fetchMatchingLeads({ tenantId = '', estado = '', search = '', limit = 50, offset = 0 } = {}) {
+  const params = new URLSearchParams();
+  if (tenantId) params.append('tenant_id', tenantId);
+  if (estado && estado !== 'TODOS') params.append('estado', estado);
+  if (search) params.append('search', search);
+  params.append('limit', limit);
+  params.append('offset', offset);
+  return await request(`/matching/leads?${params.toString()}`);
+}
+
+export async function fetchMatchingStats(tenantId = '') {
+  const query = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : '';
+  return await request(`/matching/stats${query}`);
+}
+
+export async function createManualStagingLead(data) {
+  return await request('/matching/leads', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function importBatchStagingLeads(data) {
+  return await request('/matching/leads/importar-lote', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function importZohoStagingLeads(data = {}) {
+  return await request('/matching/leads/importar-zoho', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function searchCandidateForStagingLead(stagingId) {
+  return await request(`/matching/leads/${stagingId}/buscar`, {
+    method: 'POST',
+  });
+}
+
+export async function confirmAndPromoteStagingLead(stagingId, data = {}) {
+  return await request(`/matching/leads/${stagingId}/confirmar`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function discardStagingLead(stagingId, motivo = '') {
+  return await request(`/matching/leads/${stagingId}/descartar`, {
+    method: 'POST',
+    body: JSON.stringify({ motivo }),
+  });
+}
+
+export async function deleteStagingLead(stagingId) {
+  return await request(`/matching/leads/${stagingId}`, {
+    method: 'DELETE',
+  });
+}
+
 
 
 

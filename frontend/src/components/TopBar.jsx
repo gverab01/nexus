@@ -1,11 +1,13 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Building2, 
   Briefcase,
   Eye,
   Pause,
-  Play
+  Play,
+  Clock
 } from 'lucide-react';
+import { fetchQueueStatus } from '../services/api';
 
 export default function TopBar({
   activeTab,
@@ -17,10 +19,29 @@ export default function TopBar({
   selectedWorkspaceTenantId = '',
   selectedWorkspaceName = '',
   onSelectWorkspace = null,
-  onExitWorkspace = null
+  onExitWorkspace = null,
+  onNavigateToTab = null
 }) {
   const isSuperAdmin = currentUser?.rol === 'SUPER_ADMIN';
   const isAgencyAdmin = currentUser?.rol === 'AGENCY_ADMIN';
+
+  const [queueStatus, setQueueStatus] = useState(null);
+
+  useEffect(() => {
+    let active = true;
+    const check = async () => {
+      try {
+        const st = await fetchQueueStatus(selectedWorkspaceTenantId);
+        if (active) setQueueStatus(st);
+      } catch (_) {}
+    };
+    check();
+    const timer = setInterval(check, 10000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [selectedWorkspaceTenantId]);
 
   const tabLabels = {
     super_admin: 'Plataforma',
@@ -89,6 +110,19 @@ export default function TopBar({
 
       {/* 3. Derecha: Controles de Acción (Despacho y Navegador de fondo) */}
       <div className="flex items-center gap-2 shrink-0">
+        {/* Badge Global de Cola Persistente en PostgreSQL */}
+        {queueStatus && (queueStatus.pendientes > 0 || queueStatus.en_proceso > 0) && (
+          <button
+            type="button"
+            onClick={() => onNavigateToTab && onNavigateToTab('antiban')}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-indigo-950/60 hover:bg-indigo-900/80 border border-indigo-500/40 text-indigo-300 text-[11px] font-mono transition cursor-pointer"
+            title={`Cola central PostgreSQL: ${queueStatus.pendientes} pendientes, ${queueStatus.en_proceso} en curso. Haz clic para ver el configurador y la cola.`}
+          >
+            <Clock className="w-3 h-3 text-indigo-400 animate-pulse" />
+            <span>Cola: {queueStatus.pendientes} pend.</span>
+          </button>
+        )}
+
         {/* Toggle de Despacho / Campaña */}
         {onToggleCampaign && (
           <button

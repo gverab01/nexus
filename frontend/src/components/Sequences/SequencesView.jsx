@@ -549,6 +549,17 @@ export default function SequencesView({
   // ============================================================
   // RENDER A: VISTA DETALLADA DE UNA SECUENCIA ESPECÍFICA
   // ============================================================
+  if (selectedSeqId) {
+    if (!activeSequence && loading) {
+      return (
+        <div className="p-12 text-center text-zinc-400 text-xs font-mono space-y-2">
+          <div className="w-6 h-6 border-2 border-zinc-500 border-t-white rounded-full animate-spin mx-auto" />
+          <p>Cargando detalle de la secuencia...</p>
+        </div>
+      );
+    }
+  }
+
   if (selectedSeqId && activeSequence) {
     const steps = activeSequence.pasos || [];
     const enrolledLeads = activeSequence.leads_inscritos || [];
@@ -1354,7 +1365,7 @@ export default function SequencesView({
           <UnifiedLeadsTable
             data={filteredEnrolledLeads}
             context="sequence"
-            loading={loadingData}
+            loading={loading}
             onOpenLead={(lead) => setSelectedLeadForModal({ ...lead, id: lead.id || lead.lead_id })}
             selectedLeadIds={selectedLeadIds}
             onToggleLead={handleToggleSelectLead}
@@ -1367,11 +1378,7 @@ export default function SequencesView({
                 setSyncingLeadIds((prev) => new Set(prev).add(leadId));
                 const res = await syncLeadWithLinkedIn(leadId);
                 if (res && res.lead) {
-                  setEnrolledLeads((prev) =>
-                    prev.map((l) =>
-                      (l.id === leadId || l.lead_id === leadId) ? { ...l, ...res.lead } : l
-                    )
-                  );
+                  await loadData(selectedSeqId, true);
                 }
               } catch (err) {
                 alert(`Error sincronizando prospecto con LinkedIn: ${err.message}`);

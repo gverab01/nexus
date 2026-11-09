@@ -33,6 +33,7 @@ import {
   getWhatsAppSafetyStatus,
   withdrawStaleInvitations
 } from '../../services/api';
+import TaskPoliciesConfigurator from './TaskPoliciesConfigurator';
 
 /**
  * Centro de Monitoreo de Seguridad Antiban & Blindaje Autónomo (NexusReach Pro)
@@ -46,7 +47,7 @@ import {
  * 5. Kill-Switch de parada de emergencia inmediata.
  * 6. Herramientas de mantenimiento activo: retiro de invitaciones vencidas y sync de conexiones.
  */
-export default function AntibanSettingsView() {
+export default function AntibanSettingsView({ activeTenantWorkspace = '' }) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [syncingConnections, setSyncingConnections] = useState(false);
@@ -402,6 +403,9 @@ export default function AntibanSettingsView() {
           </button>
         </div>
       </div>
+
+      {/* Configurador Granular de Políticas de Ritmo & Cuotas Centralizadas en PostgreSQL */}
+      <TaskPoliciesConfigurator activeTenantWorkspace={activeTenantWorkspace} />
 
       {/* 3. Grid Principal: Curva de Warm-up & Radar de Búsqueda Comercial */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">

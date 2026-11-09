@@ -13,7 +13,8 @@ import {
   Home,
   UserPlus,
   Eye,
-  MessageSquare
+  MessageSquare,
+  UserCheck
 } from 'lucide-react';
 
 export default function Sidebar({
@@ -22,6 +23,7 @@ export default function Sidebar({
   totalLeadsCount = 0,
   listsCount = 0,
   sequencesCount = 0,
+  matchingCount = 0,
   logsCount = 0,
   isExtracting = false,
   linkedinSessionActive = false,
@@ -83,6 +85,7 @@ export default function Sidebar({
     const prospectingItems = [
       { id: 'prospectos', label: 'Búsqueda', icon: Search, badge: null },
       { id: 'leads_directorio', label: 'Directorio', icon: Users, badge: totalLeadsCount || null },
+      { id: 'matching', label: 'Matching & Buzón', icon: UserCheck, badge: matchingCount || null },
       { id: 'listas', label: 'Listas', icon: ListFilter, badge: listsCount || null },
     ];
 
@@ -93,7 +96,7 @@ export default function Sidebar({
 
     const systemItems = [
       { id: 'antiban', label: 'Seguridad', icon: ShieldCheck, badge: allAntibanActive ? 'ok' : 'alerta' },
-      ...(isAdmin ? [{ id: 'logs', label: 'Actividad', icon: Terminal, badge: isExtracting ? 'vivo' : logsCount || null }] : []),
+      { id: 'logs', label: 'Sucesos y Actividad', icon: Terminal, badge: isExtracting ? 'vivo' : logsCount || null },
     ];
 
     if (isAgencyAdmin && !isInTenantWorkspace) {

@@ -147,6 +147,31 @@ def create_lead_list(name: str, description: str = "", search_term: str = "", st
 
     return get_lead_list_detail(list_id)
 
+def get_or_create_radar_list(tenant_id: str = "ten_superadmin") -> str:
+    """Retorna el ID de la lista especial '🎯 Radar: Descubiertos por Visita' para el tenant, creándola si no existe."""
+    list_name = "🎯 Radar: Descubiertos por Visita"
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM listas_leads WHERE nombre = ? AND tenant_id = ? LIMIT 1", (list_name, tenant_id))
+        row = cursor.fetchone()
+        if row:
+            return row["id"]
+        
+        now_iso = datetime.now().isoformat()
+        list_id = f"lista-radar-{int(time.time())}"
+        cursor.execute("""
+            INSERT INTO listas_leads (id, nombre, descripcion, termino_busqueda, estado, tenant_id, created_at, updated_at)
+            VALUES (?, ?, ?, 'RADAR_VISITAS', 'ACTIVA', ?, ?, ?)
+        """, (
+            list_id, 
+            list_name, 
+            "Prospectos afines detectados automáticamente durante visitas de inspección a perfiles de LinkedIn.",
+            tenant_id, 
+            now_iso, 
+            now_iso
+        ))
+        return list_id
+
 def update_lead_list(list_id: str, name: Optional[str] = None, description: Optional[str] = None, status: Optional[str] = None, search_term: Optional[str] = None) -> bool:
     """Actualiza los metadatos o el estado de una lista de prospectos."""
     now_iso = datetime.now().isoformat()

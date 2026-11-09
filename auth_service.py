@@ -32,15 +32,22 @@ def _init_session_table():
                 cur = c.cursor()
                 if getattr(database, "IS_POSTGRES", False):
                     cur.execute("""
-                        CREATE TABLE IF NOT EXISTS sesiones_activas (
-                            token VARCHAR(128) PRIMARY KEY,
-                            usuario_id VARCHAR(64) NOT NULL,
-                            tenant_id VARCHAR(64),
-                            perfil_json TEXT NOT NULL,
-                            expires_at DOUBLE PRECISION NOT NULL,
-                            created_at VARCHAR(64) NOT NULL
-                        )
+                        SELECT count(*) FROM information_schema.tables 
+                        WHERE table_schema = 'public' AND table_name = 'sesiones_activas';
                     """)
+                    row = cur.fetchone()
+                    count = row[0] if isinstance(row, (list, tuple)) else (row.get("count", 0) if isinstance(row, dict) else 0)
+                    if count == 0:
+                        cur.execute("""
+                            CREATE TABLE IF NOT EXISTS sesiones_activas (
+                                token VARCHAR(128) PRIMARY KEY,
+                                usuario_id VARCHAR(64) NOT NULL,
+                                tenant_id VARCHAR(64),
+                                perfil_json TEXT NOT NULL,
+                                expires_at DOUBLE PRECISION NOT NULL,
+                                created_at VARCHAR(64) NOT NULL
+                            )
+                        """)
                 else:
                     cur.execute("""
                         CREATE TABLE IF NOT EXISTS sesiones_activas (
@@ -53,7 +60,7 @@ def _init_session_table():
                         )
                     """)
     except Exception as e:
-        logger.warning(f"No se pudo inicializar tabla sesiones_activas: {e}")
+        logger.debug(f"Verificación de tabla sesiones_activas: {e}")
 
 _init_session_table()
 

@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  ShieldCheck, 
-  ShieldAlert, 
-  Clock, 
-  Power, 
-  RefreshCw, 
-  ExternalLink, 
-  CheckCircle2, 
-  AlertTriangle, 
+import {
+  ShieldCheck,
+  ShieldAlert,
+  Clock,
+  Power,
+  RefreshCw,
+  ExternalLink,
+  CheckCircle2,
+  AlertTriangle,
   Lock,
   Sparkles,
   Zap,
@@ -24,9 +24,9 @@ import {
   UserCheck,
   UserX
 } from 'lucide-react';
-import { 
-  fetchSafetyStatus, 
-  toggleCampaign, 
+import {
+  fetchSafetyStatus,
+  toggleCampaign,
   showWorkBrowser,
   syncAcceptedConnections,
   getLinkedInWarmupStatus,
@@ -34,6 +34,7 @@ import {
   withdrawStaleInvitations
 } from '../../services/api';
 import TaskPoliciesConfigurator from './TaskPoliciesConfigurator';
+import ScheduleConfigurator from './ScheduleConfigurator';
 
 /**
  * Centro de Monitoreo de Seguridad Antiban & Blindaje Autónomo (NexusReach Pro)
@@ -122,6 +123,7 @@ export default function AntibanSettingsView({ activeTenantWorkspace = '' }) {
           kill_switch_activado: isKillSwitch,
           es_horario_laboral: enHorario,
           detalle_horario: detalle,
+          rawHorario: safetyRes.horario_laboral,
           invitaciones_hoy: invHoy,
           limite_invitaciones_hoy: limInv,
           mensajes_hoy: safetyRes.mensajes_hoy ?? 0,
@@ -260,11 +262,10 @@ export default function AntibanSettingsView({ activeTenantWorkspace = '' }) {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/[0.08] pb-5">
         <div>
           <div className="flex items-center gap-3">
-            <div className={`p-2.5 rounded-xl border flex items-center justify-center shrink-0 ${
-              isShieldFullyActive 
-                ? 'bg-emerald-950/60 text-emerald-400 border-emerald-500/30 shadow-sm shadow-emerald-900/30' 
-                : 'bg-rose-950/60 text-rose-400 border-rose-500/30 shadow-sm shadow-rose-900/30'
-            }`}>
+            <div className={`p-2.5 rounded-xl border flex items-center justify-center shrink-0 ${isShieldFullyActive
+              ? 'bg-emerald-950/60 text-emerald-400 border-emerald-500/30 shadow-sm shadow-emerald-900/30'
+              : 'bg-rose-950/60 text-rose-400 border-rose-500/30 shadow-sm shadow-rose-900/30'
+              }`}>
               <ShieldCheck className="w-6 h-6" />
             </div>
             <div>
@@ -272,11 +273,10 @@ export default function AntibanSettingsView({ activeTenantWorkspace = '' }) {
                 <h1 className="text-xl md:text-2xl font-bold tracking-tight text-zinc-100">
                   Centro de Monitoreo Antiban & Blindaje Autónomo
                 </h1>
-                <span className={`text-[11px] px-2.5 py-0.5 rounded-full font-mono font-medium border flex items-center gap-1.5 ${
-                  isShieldFullyActive 
-                    ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/40' 
-                    : 'bg-rose-950/80 text-rose-300 border-rose-500/40'
-                }`}>
+                <span className={`text-[11px] px-2.5 py-0.5 rounded-full font-mono font-medium border flex items-center gap-1.5 ${isShieldFullyActive
+                  ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/40'
+                  : 'bg-rose-950/80 text-rose-300 border-rose-500/40'
+                  }`}>
                   <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isShieldFullyActive ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`} />
                   <span>{isShieldFullyActive ? 'BLINDAJE AUTÓNOMO 100% ACTIVO' : 'KILL-SWITCH ACTIVADO (EN PAUSA)'}</span>
                 </span>
@@ -332,13 +332,12 @@ export default function AntibanSettingsView({ activeTenantWorkspace = '' }) {
 
       {/* Banner de Notificación Contextual */}
       {notification && (
-        <div className={`p-4 rounded-xl border text-xs flex items-center justify-between gap-3 animate-fadeIn ${
-          notification.type === 'success'
-            ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
-            : notification.type === 'warning'
+        <div className={`p-4 rounded-xl border text-xs flex items-center justify-between gap-3 animate-fadeIn ${notification.type === 'success'
+          ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
+          : notification.type === 'warning'
             ? 'bg-amber-950/40 border-amber-500/40 text-amber-200'
             : 'bg-rose-950/40 border-rose-500/40 text-rose-200'
-        }`}>
+          }`}>
           <div className="flex items-center gap-2.5">
             {notification.type === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />}
             {notification.type === 'warning' && <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />}
@@ -355,18 +354,16 @@ export default function AntibanSettingsView({ activeTenantWorkspace = '' }) {
       )}
 
       {/* 2. Tarjeta Destacada: Interruptor Maestro (Kill-Switch) de Emergencia */}
-      <div className={`p-5 rounded-2xl border transition-all ${
-        safetyData.kill_switch_activado
-          ? 'bg-gradient-to-r from-rose-950/40 via-zinc-900 to-rose-950/30 border-rose-500/40 shadow-lg shadow-rose-950/20'
-          : 'bg-gradient-to-r from-emerald-950/30 via-[#121316] to-zinc-900 border-white/[0.08]'
-      }`}>
+      <div className={`p-5 rounded-2xl border transition-all ${safetyData.kill_switch_activado
+        ? 'bg-gradient-to-r from-rose-950/40 via-zinc-900 to-rose-950/30 border-rose-500/40 shadow-lg shadow-rose-950/20'
+        : 'bg-gradient-to-r from-emerald-950/30 via-[#121316] to-zinc-900 border-white/[0.08]'
+        }`}>
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3.5">
-            <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 border ${
-              safetyData.kill_switch_activado
-                ? 'bg-rose-500/20 border-rose-500/40 text-rose-400'
-                : 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
-            }`}>
+            <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 border ${safetyData.kill_switch_activado
+              ? 'bg-rose-500/20 border-rose-500/40 text-rose-400'
+              : 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
+              }`}>
               <Power className="w-5 h-5" />
             </div>
             <div>
@@ -374,11 +371,10 @@ export default function AntibanSettingsView({ activeTenantWorkspace = '' }) {
                 <h2 className="text-base font-semibold text-zinc-100">
                   Interruptor Maestro de Seguridad (Kill-Switch)
                 </h2>
-                <span className={`text-[10px] px-2 py-0.2 rounded-full font-mono border ${
-                  safetyData.kill_switch_activado
-                    ? 'bg-rose-950 text-rose-300 border-rose-500/40'
-                    : 'bg-emerald-950 text-emerald-300 border-emerald-500/40'
-                }`}>
+                <span className={`text-[10px] px-2 py-0.2 rounded-full font-mono border ${safetyData.kill_switch_activado
+                  ? 'bg-rose-950 text-rose-300 border-rose-500/40'
+                  : 'bg-emerald-950 text-emerald-300 border-emerald-500/40'
+                  }`}>
                   {safetyData.kill_switch_activado ? 'DETENIDO' : 'EN OPERACIÓN'}
                 </span>
               </div>
@@ -392,11 +388,10 @@ export default function AntibanSettingsView({ activeTenantWorkspace = '' }) {
 
           <button
             onClick={handleToggleKillSwitch}
-            className={`px-4 py-2 rounded-xl text-xs font-semibold shadow-sm transition cursor-pointer shrink-0 flex items-center gap-2 ${
-              safetyData.kill_switch_activado
-                ? 'bg-emerald-500 hover:bg-emerald-400 text-zinc-950 shadow-emerald-500/20'
-                : 'bg-rose-950/80 hover:bg-rose-900 text-rose-200 border border-rose-500/40 shadow-rose-950/40'
-            }`}
+            className={`px-4 py-2 rounded-xl text-xs font-semibold shadow-sm transition cursor-pointer shrink-0 flex items-center gap-2 ${safetyData.kill_switch_activado
+              ? 'bg-emerald-500 hover:bg-emerald-400 text-zinc-950 shadow-emerald-500/20'
+              : 'bg-rose-950/80 hover:bg-rose-900 text-rose-200 border border-rose-500/40 shadow-rose-950/40'
+              }`}
           >
             <Power className="w-3.5 h-3.5" />
             <span>{safetyData.kill_switch_activado ? 'Reanudar Actividad Segura' : 'Pausar Todo de Emergencia'}</span>
@@ -404,12 +399,18 @@ export default function AntibanSettingsView({ activeTenantWorkspace = '' }) {
         </div>
       </div>
 
+      {/* Configurador de Jornada y Horarios de Operación */}
+      <ScheduleConfigurator
+        scheduleData={safetyData.rawHorario}
+        onUpdated={loadAllSafetyData}
+      />
+
       {/* Configurador Granular de Políticas de Ritmo & Cuotas Centralizadas en PostgreSQL */}
       <TaskPoliciesConfigurator activeTenantWorkspace={activeTenantWorkspace} />
 
       {/* 3. Grid Principal: Curva de Warm-up & Radar de Búsqueda Comercial */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        
+
         {/* PANEL A: Curva de Calentamiento Autónoma de LinkedIn (2 columnas) */}
         <div className="lg:col-span-2 p-5 rounded-2xl bg-[#121316] border border-white/[0.08] space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/[0.06] pb-3">
@@ -468,19 +469,17 @@ export default function AntibanSettingsView({ activeTenantWorkspace = '' }) {
               return (
                 <div
                   key={fase.semana}
-                  className={`p-3 rounded-xl border flex flex-col justify-between transition-all ${
-                    isCurrent
-                      ? 'bg-emerald-950/40 border-emerald-500/40 shadow-sm shadow-emerald-950/40'
-                      : isPassed
+                  className={`p-3 rounded-xl border flex flex-col justify-between transition-all ${isCurrent
+                    ? 'bg-emerald-950/40 border-emerald-500/40 shadow-sm shadow-emerald-950/40'
+                    : isPassed
                       ? 'bg-zinc-900/60 border-zinc-800/80 text-zinc-400'
                       : 'bg-zinc-900/30 border-zinc-850 text-zinc-500'
-                  }`}
+                    }`}
                 >
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
-                      <span className={`text-[10px] font-mono uppercase font-semibold ${
-                        isCurrent ? 'text-emerald-400' : isPassed ? 'text-zinc-400' : 'text-zinc-600'
-                      }`}>
+                      <span className={`text-[10px] font-mono uppercase font-semibold ${isCurrent ? 'text-emerald-400' : isPassed ? 'text-zinc-400' : 'text-zinc-600'
+                        }`}>
                         {fase.etiqueta}
                       </span>
                       {isCurrent && (
@@ -490,9 +489,8 @@ export default function AntibanSettingsView({ activeTenantWorkspace = '' }) {
                         <Check className="w-3 h-3 text-zinc-500" />
                       )}
                     </div>
-                    <div className={`text-xl font-bold font-mono tracking-tight ${
-                      isCurrent ? 'text-emerald-300' : isPassed ? 'text-zinc-300' : 'text-zinc-500'
-                    }`}>
+                    <div className={`text-xl font-bold font-mono tracking-tight ${isCurrent ? 'text-emerald-300' : isPassed ? 'text-zinc-300' : 'text-zinc-500'
+                      }`}>
                       {fase.limite} <span className="text-[10px] font-normal font-sans text-zinc-500">/día</span>
                     </div>
                   </div>
@@ -548,13 +546,12 @@ export default function AntibanSettingsView({ activeTenantWorkspace = '' }) {
                 </div>
                 <div className="w-full h-2 rounded-full bg-zinc-800 overflow-hidden">
                   <div
-                    className={`h-full rounded-full transition-all ${
-                      warmupData.busquedas.porcentaje > 80
-                        ? 'bg-rose-500'
-                        : warmupData.busquedas.porcentaje > 50
+                    className={`h-full rounded-full transition-all ${warmupData.busquedas.porcentaje > 80
+                      ? 'bg-rose-500'
+                      : warmupData.busquedas.porcentaje > 50
                         ? 'bg-amber-400'
                         : 'bg-sky-400'
-                    }`}
+                      }`}
                     style={{ width: `${Math.min(100, warmupData.busquedas.porcentaje)}%` }}
                   />
                 </div>
@@ -608,7 +605,11 @@ export default function AntibanSettingsView({ activeTenantWorkspace = '' }) {
             </div>
             <div className="p-2.5 rounded-xl bg-[#0D0E12] border border-white/[0.04] flex items-center justify-between font-mono">
               <span className="text-zinc-400 text-[11px]">Horario comercial programado:</span>
-              <span className="text-zinc-200">Lun - Vie &bull; 09:00 - 18:00</span>
+              <span className="text-zinc-200">
+                {safetyData.rawHorario?.restriccion_activa === false
+                  ? 'Modo 24/7 (Continuo)'
+                  : `${safetyData.rawHorario?.horario_inicio || '09:00'} - ${safetyData.rawHorario?.horario_fin || '18:00'}`}
+              </span>
             </div>
           </div>
 

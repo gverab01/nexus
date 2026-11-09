@@ -553,8 +553,14 @@ export async function toggleCampaign(targetState) {
   }
 }
 
-export async function updateSafetyConfig(clave, valor) {
-  return await request(`/seguridad/configuracion?clave=${encodeURIComponent(clave)}&valor=${encodeURIComponent(valor)}`, { method: 'POST' });
+export async function updateSafetyConfig(claveOrBody, valor) {
+  if (typeof claveOrBody === 'object' && claveOrBody !== null) {
+    return await request('/seguridad/configuracion', {
+      method: 'POST',
+      body: JSON.stringify(claveOrBody)
+    });
+  }
+  return await request(`/seguridad/configuracion?clave=${encodeURIComponent(claveOrBody)}&valor=${encodeURIComponent(valor)}`, { method: 'POST' });
 }
 
 export async function syncAcceptedConnections(tenantId = '') {

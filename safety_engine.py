@@ -53,29 +53,51 @@ def set_safety_config_val(key: str, value: str, conn=None) -> bool:
             ctx.__exit__(None, None, None)
 
 # ==============================================================================
-# 1. BUSINESS HOURS CONTROL (Monday to Friday, Safe Window)
+# 1. BUSINESS HOURS CONTROL (Configurable Working Days & Window)
 # ==============================================================================
+
+DIAS_SEMANA_MAP = {
+    0: "Lunes",
+    1: "Martes",
+    2: "Miércoles",
+    3: "Jueves",
+    4: "Viernes",
+    5: "Sábado",
+    6: "Domingo"
+}
 
 def check_business_hours(config: Optional[Dict[str, str]] = None) -> Tuple[bool, str]:
     """
-    Verifica si el momento actual está dentro del horario comercial seguro.
+    Verifica si el momento actual está dentro del horario comercial y días permitidos por el usuario.
     Retorna (es_horario_valido, motivo).
     """
     cfg = config or get_all_safety_config()
     
-    # If restriction is deactivated for testing
+    # 0. Si la restricción de horario laboral está desactivada, opera 24/7 sin bloqueos
     if cfg.get("horario_laboral_activo", "1") == "0":
-        return True, "Restricción de horario desactivada por configuración."
+        return True, "Restricción de horario desactivada por configuración (operación 24/7 habilitada)."
 
     now = datetime.now()
-    weekday = now.weekday()  # 0=Monday, 4=Friday, 5=Saturday, 6=Sunday
-    
-    if weekday >= 5:
-        day_name = "Sábado" if weekday == 5 else "Domingo"
-        return False, f"Fin de semana ({day_name}): Campañas de prospección y correos B2B no deben enviarse fuera de días hábiles."
+    weekday = now.weekday()  # 0=Lunes, 6=Domingo
+    day_name = DIAS_SEMANA_MAP.get(weekday, f"Día {weekday}")
 
-    start_str = cfg.get("horario_inicio", "09:00")
-    end_str = cfg.get("horario_fin", "18:00")
+    # 1. Validación de Días Habilitados (por defecto Lun-Vie: 0,1,2,3,4)
+    dias_raw = cfg.get("dias_laborales", "0,1,2,3,4")
+    try:
+        dias_permitidos = [int(d.strip()) for d in str(dias_raw).split(",") if d.strip().isdigit()]
+    except Exception:
+        dias_permitidos = [0, 1, 2, 3, 4]
+
+    if not dias_permitidos:
+        dias_permitidos = [0, 1, 2, 3, 4]
+
+    if weekday not in dias_permitidos:
+        nombres_dias_activos = ", ".join([DIAS_SEMANA_MAP.get(d, str(d))[:3] for d in sorted(dias_permitidos)])
+        return False, f"Hoy es {day_name} (día no habilitado). Días activos configurados: {nombres_dias_activos}."
+
+    # 2. Validación de Horas de Operación
+    start_str = cfg.get("horario_inicio", "09:00").strip()
+    end_str = cfg.get("horario_fin", "18:00").strip()
     
     try:
         t_start = datetime.strptime(start_str, "%H:%M").time()
@@ -83,12 +105,21 @@ def check_business_hours(config: Optional[Dict[str, str]] = None) -> Tuple[bool,
     except Exception:
         t_start = datetime.strptime("09:00", "%H:%M").time()
         t_end = datetime.strptime("18:00", "%H:%M").time()
+        start_str = "09:00"
+        end_str = "18:00"
 
     current_t = now.time()
-    if current_t < t_start or current_t > t_end:
-        return False, f"Fuera de horario laboral comercial ({now.strftime('%H:%M')}). Ventana permitida: {start_str} a {end_str}."
 
-    return True, f"En horario laboral permitido ({now.strftime('%H:%M')})."
+    # Ventana estándar diurna (ej. 08:00 a 22:00)
+    if t_start <= t_end:
+        if current_t < t_start or current_t > t_end:
+            return False, f"Fuera de horario laboral ({now.strftime('%H:%M')}). Ventana permitida: {start_str} a {end_str} ({day_name})."
+    else:
+        # Ventana que cruza la medianoche (ej. 20:00 a 02:00)
+        if not (current_t >= t_start or current_t <= t_end):
+            return False, f"Fuera de horario laboral nocturno ({now.strftime('%H:%M')}). Ventana permitida: {start_str} a {end_str} ({day_name})."
+
+    return True, f"En horario laboral permitido ({now.strftime('%H:%M')}). Ventana: {start_str} a {end_str} ({day_name})."
 
 # ==============================================================================
 # 2. GAUSSIAN STOCHASTIC JITTER (Human Pauses)

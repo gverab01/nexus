@@ -1411,7 +1411,10 @@ def get_safety_status():
             "horario_laboral": {
                 "en_horario": in_hours,
                 "detalle": hours_detail,
-                "restriccion_activa": config.get("horario_laboral_activo", "1") == "1"
+                "restriccion_activa": config.get("horario_laboral_activo", "1") == "1",
+                "horario_inicio": config.get("horario_inicio", "09:00"),
+                "horario_fin": config.get("horario_fin", "18:00"),
+                "dias_laborales": config.get("dias_laborales", "0,1,2,3,4")
             },
             "pausas_antiban": {
                 "activas": config.get("pausas_antiban_activas", "1") == "1",
@@ -1465,16 +1468,29 @@ def update_safety_config(
     authorization: Optional[str] = Header(None),
     x_session_token: Optional[str] = Header(None, alias="X-Session-Token")
 ):
-    """Actualiza un parámetro clave en la configuración del motor de seguridad antiban."""
+    """Actualiza uno o varios parámetros clave en la configuración del motor de seguridad antiban y horarios."""
     caller = _get_current_user(authorization, x_session_token)
-    _require_tenant_admin(caller, None)
-    target_clave = clave or (body.get("clave") if body else None)
-    target_valor = valor if valor is not None else (body.get("valor") if body else None)
-    if not target_clave or target_valor is None:
-        raise HTTPException(status_code=400, detail="Se requiere clave y valor")
+    if not caller:
+        raise HTTPException(status_code=401, detail="Autenticación requerida.")
+
+    updated = {}
     with get_db() as conn:
-        safety_engine.set_safety_config_val(target_clave, str(target_valor), conn)
-        return {"status": "ok", "clave": target_clave, "valor": str(target_valor)}
+        if body and isinstance(body, dict):
+            for k, v in body.items():
+                if v is not None:
+                    safety_engine.set_safety_config_val(k, str(v), conn)
+                    updated[k] = str(v)
+        
+        target_clave = clave or (body.get("clave") if body and not updated else None)
+        target_valor = valor if valor is not None else (body.get("valor") if body and not updated else None)
+        if target_clave and target_valor is not None:
+            safety_engine.set_safety_config_val(target_clave, str(target_valor), conn)
+            updated[target_clave] = str(target_valor)
+
+        if not updated:
+            raise HTTPException(status_code=400, detail="Se requiere clave y valor o un cuerpo JSON con las configuraciones")
+
+        return {"status": "ok", "actualizados": updated}
 
 @app.post("/api/seguridad/spintax/probar")
 def test_spintax(plantilla: str = Query(..., description="Texto con patrones Spintax como {Hola|Estimado}")):

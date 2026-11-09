@@ -1445,7 +1445,7 @@ def activate_kill_switch_manual(
 ):
     """Activa manualmente el freno de emergencia (kill-switch) deteniendo todas las operaciones salientes."""
     caller = _get_current_user(authorization, x_session_token)
-    _require_tenant_admin(caller, None)
+    _resolve_permitted_tenants(caller, None)
     with get_db() as conn:
         return safety_engine.activate_kill_switch(motivo, conn)
 
@@ -1456,7 +1456,7 @@ def deactivate_kill_switch_manual(
 ):
     """Desactiva el freno de emergencia permitiendo reanudar las operaciones normales."""
     caller = _get_current_user(authorization, x_session_token)
-    _require_tenant_admin(caller, None)
+    _resolve_permitted_tenants(caller, None)
     with get_db() as conn:
         return safety_engine.deactivate_kill_switch(conn)
 
@@ -1470,8 +1470,7 @@ def update_safety_config(
 ):
     """Actualiza uno o varios parámetros clave en la configuración del motor de seguridad antiban y horarios."""
     caller = _get_current_user(authorization, x_session_token)
-    if not caller:
-        raise HTTPException(status_code=401, detail="Autenticación requerida.")
+    _resolve_permitted_tenants(caller, None)
 
     updated = {}
     with get_db() as conn:
@@ -1668,6 +1667,39 @@ def list_sequences_endpoint(
     caller = _get_current_user(authorization, x_session_token)
     tenants = _resolve_permitted_tenants(caller, tenant_id)
     return {"secuencias": sequence_engine.get_sequences(tenant_ids=tenants)}
+
+# ==========================================
+# REGISTRO HISTÓRICO DE SUCESOS (OPERADOR & ADMIN)
+# NOTA: Debe declararse ANTES de /api/secuencias/{secuencia_id} para evitar colisión de ruta
+# ==========================================
+@app.get("/api/secuencias/sucesos")
+@app.get("/api/sucesos")
+def get_secuencias_sucesos_endpoint(
+    limit: int = Query(50, description="Cantidad máxima de sucesos a retornar"),
+    offset: int = Query(0, description="Desplazamiento para paginación"),
+    tipo_evento: Optional[str] = Query(None, description="Filtro por tipo de evento"),
+    search: Optional[str] = Query(None, description="Término de búsqueda por prospecto, cargo o detalle"),
+    secuencia_id: Optional[str] = Query(None, description="Filtrar por ID de secuencia"),
+    tenant_id: Optional[str] = Query(None, description="Filtrar sucesos por tenant autorizado"),
+    authorization: Optional[str] = Header(None),
+    x_session_token: Optional[str] = Header(None, alias="X-Session-Token")
+):
+    """
+    Retorna el historial cronológico de sucesos y acciones ejecutadas por las secuencias
+    (Visitas, Invitaciones, Mensajes, Esperas, Sincronizaciones).
+    Accesible para el rol OPERADOR, COMPANY_ADMIN, AGENCY_ADMIN y SUPER_ADMIN.
+    """
+    caller = _get_current_user(authorization, x_session_token)
+    tenants = _resolve_permitted_tenants(caller, tenant_id)
+    import sequence_engine
+    return sequence_engine.get_sequence_events(
+        tenant_ids=tenants,
+        limit=limit,
+        offset=offset,
+        tipo_evento=tipo_evento,
+        search=search,
+        secuencia_id=secuencia_id
+    )
 
 @app.get("/api/secuencias/{secuencia_id}")
 def get_sequence_endpoint(
@@ -2348,37 +2380,6 @@ def clear_logs_endpoint(
     import logger_service
     logger_service.clear_logs()
     return {"status": "ok", "message": "Logs eliminados correctamente"}
-
-# ==========================================
-# REGISTRO HISTÓRICO DE SUCESOS (OPERADOR & ADMIN)
-# ==========================================
-@app.get("/api/secuencias/sucesos")
-def get_secuencias_sucesos_endpoint(
-    limit: int = Query(50, description="Cantidad máxima de sucesos a retornar"),
-    offset: int = Query(0, description="Desplazamiento para paginación"),
-    tipo_evento: Optional[str] = Query(None, description="Filtro por tipo de evento"),
-    search: Optional[str] = Query(None, description="Término de búsqueda por prospecto, cargo o detalle"),
-    secuencia_id: Optional[str] = Query(None, description="Filtrar por ID de secuencia"),
-    tenant_id: Optional[str] = Query(None, description="Filtrar sucesos por tenant autorizado"),
-    authorization: Optional[str] = Header(None),
-    x_session_token: Optional[str] = Header(None, alias="X-Session-Token")
-):
-    """
-    Retorna el historial cronológico de sucesos y acciones ejecutadas por las secuencias
-    (Visitas, Invitaciones, Mensajes, Esperas, Sincronizaciones).
-    Accesible para el rol OPERADOR, COMPANY_ADMIN, AGENCY_ADMIN y SUPER_ADMIN.
-    """
-    caller = _get_current_user(authorization, x_session_token)
-    tenants = _resolve_permitted_tenants(caller, tenant_id)
-    import sequence_engine
-    return sequence_engine.get_sequence_events(
-        tenant_ids=tenants,
-        limit=limit,
-        offset=offset,
-        tipo_evento=tipo_evento,
-        search=search,
-        secuencia_id=secuencia_id
-    )
 
 def _extract_raw_session_token(
     authorization: Optional[str] = None,

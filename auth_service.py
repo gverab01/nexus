@@ -491,12 +491,12 @@ def authenticate_user(email: str, password: str, remote_url: Optional[str] = Non
                         VALUES (?, ?, ?, ?, ?, ?)
                         ON CONFLICT (token) DO UPDATE 
                         SET perfil_json = EXCLUDED.perfil_json, expires_at = EXCLUDED.expires_at
-                    """, (token, user["id"], tenant_id, json.dumps(profile), profile["expires_at"], now_iso))
+                    """, (token, user["id"], tenant_id, json.dumps(profile, default=str), profile["expires_at"], now_iso))
                 else:
                     cur.execute("""
                         INSERT OR REPLACE INTO sesiones_activas (token, usuario_id, tenant_id, perfil_json, expires_at, created_at)
                         VALUES (?, ?, ?, ?, ?, ?)
-                    """, (token, user["id"], tenant_id, json.dumps(profile), profile["expires_at"], now_iso))
+                    """, (token, user["id"], tenant_id, json.dumps(profile, default=str), profile["expires_at"], now_iso))
     except Exception as e:
         logger.warning(f"Error persistiendo sesión activa en BD: {e}")
 
@@ -539,7 +539,8 @@ def verify_token(token: str) -> Optional[Dict[str, Any]]:
                     cur.execute("SELECT perfil_json, expires_at FROM sesiones_activas WHERE token = ?", (token,))
                     row = cur.fetchone()
                     if row:
-                        p_json, exp_at = row[0], float(row[1])
+                        p_json = row["perfil_json"] if isinstance(row, dict) else row[0]
+                        exp_at = float(row["expires_at"] if isinstance(row, dict) else row[1])
                         if exp_at > time.time():
                             ACTIVE_SESSIONS[token] = json.loads(p_json)
                         else:

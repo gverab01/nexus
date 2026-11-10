@@ -159,13 +159,127 @@ async function handleLinkedInVisit(win, params) {
 
   await sleep(2500 + Math.random() * 2000);
 
+  // Extracción de datos del perfil visitado e inspección de contacto y perfiles afines (Radar)
+  let pageData = null;
+  try {
+    pageData = await safeExecuteInIsolatedWorld(win, `
+      (() => {
+        try {
+          const url = window.location.href;
+          const pageTitle = (document.title || '').trim();
+
+          // 1. Datos básicos del perfil
+          let name = '';
+          if (pageTitle.includes('|')) name = pageTitle.split('|')[0].trim();
+          else if (pageTitle.includes('-')) name = pageTitle.split('-')[0].trim();
+
+          const sections = Array.from(document.querySelectorAll('section'));
+          const introSec = sections.find(s => {
+            const text = (s.innerText || '').trim();
+            return text.includes('Información de contacto') || text.includes('contact info') || text.includes('contactos') || text.includes('connections');
+          }) || sections[1] || sections[0];
+
+          let headline = '';
+          let location = 'Chile';
+          let grado = '2º';
+
+          if (introSec) {
+            const h2 = introSec.querySelector('h2') || introSec.querySelector('h1');
+            if (h2 && (!name || name === 'LinkedIn')) name = h2.innerText.trim();
+
+            const spans = Array.from(introSec.querySelectorAll('div, span, p'));
+            for (const sp of spans) {
+              const t = (sp.innerText || '').trim();
+              if (/1er|1º|1°/i.test(t)) { grado = '1º'; break; }
+              if (/2do|2º|2°/i.test(t)) { grado = '2º'; break; }
+              if (/3er|3º|3°/i.test(t)) { grado = '3º+'; break; }
+            }
+
+            const sub = introSec.querySelector('.text-body-medium, div.inline-show-more-text');
+            if (sub) headline = (sub.innerText || '').trim();
+          }
+
+          // 2. Extracción de contacto visible (Email y Teléfono)
+          let directEmail = null;
+          let directPhone = null;
+
+          const mailto = document.querySelector('a[href^="mailto:"]');
+          if (mailto) {
+            directEmail = (mailto.getAttribute('href') || '').replace(/^mailto:/i, '').split('?')[0].trim();
+          }
+          if (!directEmail) {
+            const bodyText = document.body ? document.body.innerText : '';
+            const emailMatch = bodyText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/);
+            if (emailMatch && !emailMatch[0].includes('linkedin.com') && !emailMatch[0].includes('example.com')) {
+              directEmail = emailMatch[0];
+            }
+          }
+
+          const tel = document.querySelector('a[href^="tel:"]');
+          if (tel) {
+            directPhone = (tel.getAttribute('href') || '').replace(/^tel:/i, '').split('?')[0].trim();
+          }
+
+          // 3. Extracción de perfiles afines (Personas que también vieron / Más perfiles para ti)
+          const similarProfiles = [];
+          const asideCards = Array.from(document.querySelectorAll('aside section, div[data-view-name="profile-component-entity"], aside ul li, .aside-section-container ul li, [data-member-id]'));
+          const seenUrls = new Set();
+
+          for (const card of asideCards) {
+            const link = card.querySelector('a[href*="/in/"]');
+            if (!link) continue;
+            let rawHref = (link.getAttribute('href') || '').split('?')[0].trim();
+            if (!rawHref.startsWith('http')) {
+              rawHref = 'https://www.linkedin.com' + (rawHref.startsWith('/') ? '' : '/') + rawHref;
+            }
+            if (rawHref.includes('/in/') && !seenUrls.has(rawHref) && !rawHref.includes(url.split('?')[0])) {
+              seenUrls.add(rawHref);
+
+              const spans = Array.from(card.querySelectorAll('span[aria-hidden="true"], p, div.entity-result__primary-subtitle'));
+              const validTexts = spans.map(s => (s.innerText || '').trim()).filter(t => t.length > 1 && !t.includes('1er') && !t.includes('2do') && !t.includes('Conectar') && !t.includes('Seguir'));
+
+              const pName = validTexts[0] || (link.innerText || '').split('\\n')[0].trim();
+              const pHeadline = validTexts[1] || '';
+
+              if (pName && pName.length > 2 && pName !== name && !pName.toLowerCase().includes('linkedin')) {
+                similarProfiles.push({
+                  nombre: pName,
+                  cargo_titular: pHeadline,
+                  perfil_url: rawHref
+                });
+              }
+            }
+            if (similarProfiles.length >= 8) break;
+          }
+
+          return {
+            ok: true,
+            nombre: name,
+            headline: headline,
+            grado: grado,
+            email: directEmail,
+            phone: directPhone,
+            similar_profiles: similarProfiles
+          };
+        } catch (e) {
+          return { ok: false, error: e.message };
+        }
+      })()
+    `);
+  } catch (err) {}
+
   return {
     success: true,
     result: {
       action: 'LI_VISIT_PROFILE',
       profile_url: profileUrl,
       final_url: finalUrl,
-      visited_at: new Date().toISOString()
+      visited_at: new Date().toISOString(),
+      email: pageData && pageData.email ? pageData.email : null,
+      phone: pageData && pageData.phone ? pageData.phone : null,
+      cargo_titular: pageData && pageData.headline ? pageData.headline : null,
+      grado_red: pageData && pageData.grado ? pageData.grado : null,
+      similar_profiles: (pageData && pageData.similar_profiles) || []
     }
   };
 }

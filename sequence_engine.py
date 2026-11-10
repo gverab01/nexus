@@ -654,14 +654,14 @@ def get_leads_in_sequence(sequence_id: str, status: Optional[str] = None) -> Lis
 # SEQUENCE STEP & BRANCH EXECUTION ENGINE
 # ==============================================================================
 
-def get_next_executable_lead(sequence_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Encuentra el siguiente prospecto cuyo plazo de espera ha vencido y está listo para ejecución."""
+def get_next_executable_lead(sequence_id: Optional[str] = None, tenant_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Encuentra el siguiente prospecto cuyo plazo de espera ha vencido y está listo para ejecución, aplicando intercalación estocástica de acciones."""
     now_iso = datetime.now().isoformat()
     with get_db() as conn:
         cursor = conn.cursor()
         query = """
             SELECT ls.*, l.nombre, l.cargo_actual, l.cargo_titular, l.institucion_actual, l.email, l.telefono, l.perfil_url, l.estado as lead_estado,
-                   p.tipo_accion, p.condicion_rama, p.parametros_json, p.orden, p.secuencia_id, s.nombre as secuencia_nombre
+                   p.tipo_accion, p.condicion_rama, p.parametros_json, p.orden, p.secuencia_id, s.nombre as secuencia_nombre, s.tenant_id
             FROM leads_en_secuencia ls
             JOIN leads l ON ls.lead_id = l.id
             JOIN pasos_secuencia p ON ls.paso_actual_id = p.id
@@ -675,11 +675,46 @@ def get_next_executable_lead(sequence_id: Optional[str] = None) -> Optional[Dict
         if sequence_id:
             query += " AND ls.secuencia_id = ?"
             params.append(sequence_id)
-        query += " ORDER BY ls.proxima_ejecucion_at ASC LIMIT 1"
+        if tenant_id:
+            query += " AND s.tenant_id = ?"
+            params.append(tenant_id)
+        query += " ORDER BY ls.proxima_ejecucion_at ASC LIMIT 50"
         cursor.execute(query, params)
-        return cursor.fetchone()
+        raw_leads = cursor.fetchall()
+        if not raw_leads:
+            return None
 
-def execute_next_step(sequence_id: Optional[str] = None) -> Dict[str, Any]:
+        # Resolver intercalación contra el último suceso ejecutado
+        cursor.execute("""
+            SELECT tipo_evento FROM historial_actividades
+            ORDER BY timestamp DESC LIMIT 1
+        """)
+        last_ev_row = cursor.fetchone()
+        last_ev = (last_ev_row["tipo_evento"] if last_ev_row else "") or ""
+
+        last_cat = "VISITA" if "VISIT" in last_ev else (
+            "INVITACION" if "INVIT" in last_ev else (
+                "MENSAJE" if "MENSAJE" in last_ev or "WHATSAPP" in last_ev else None
+            )
+        )
+
+        def get_lead_cat(item):
+            t = (item.get("tipo_accion") or "").upper()
+            if "VISIT" in t: return "VISITA"
+            if "INVIT" in t: return "INVITACION"
+            if "MENSAJE" in t or "WHATSAPP" in t: return "MENSAJE"
+            return "OTRO"
+
+        if last_cat:
+            alternate_leads = [l for l in raw_leads if get_lead_cat(l) != last_cat]
+            same_leads = [l for l in raw_leads if get_lead_cat(l) == last_cat]
+            candidates = alternate_leads + same_leads if alternate_leads else raw_leads
+        else:
+            candidates = raw_leads
+
+        return candidates[0] if candidates else None
+
+def execute_next_step(sequence_id: Optional[str] = None, tenant_id: Optional[str] = None) -> Dict[str, Any]:
     """Punto de entrada principal: localiza el siguiente prospecto elegible y ejecuta su paso atómico aplicando restricciones de seguridad antiban."""
     import logger_service
 
@@ -701,7 +736,7 @@ def execute_next_step(sequence_id: Optional[str] = None) -> Dict[str, Any]:
             }
 
     # 2. Retrieve next ready lead
-    lead_item = get_next_executable_lead(sequence_id)
+    lead_item = get_next_executable_lead(sequence_id, tenant_id=tenant_id)
     if not lead_item:
         logger_service.log_event(
             "INFO",

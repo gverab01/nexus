@@ -72,7 +72,8 @@ def start_periodic_delay_sweeper():
         time.sleep(3)
         while True:
             try:
-                sequence_engine.promote_expired_delays()
+                with database.tenant_context_scope(is_super_admin=True):
+                    sequence_engine.promote_expired_delays()
             except Exception:
                 pass
             time.sleep(25)
@@ -1855,38 +1856,40 @@ def execute_next_step_endpoint(
     """Ejecuta el siguiente paso pendiente de una secuencia aplicando todas las reglas de seguridad antiban."""
     caller = _get_current_user(authorization, x_session_token)
     tenants = _resolve_permitted_tenants(caller, tenant_id)
-    if secuencia_id:
-        sec = _authorize_sequence_access(caller, secuencia_id)
-        if tenant_id and sec.get("tenant_id") not in tenants:
-            raise HTTPException(status_code=403, detail="La secuencia no pertenece al workspace solicitado.")
-        return sequence_engine.execute_next_step(secuencia_id)
+    target_tenant = tenants[0]
+    with database.tenant_context_scope(tenant_id=target_tenant):
+        if secuencia_id:
+            sec = _authorize_sequence_access(caller, secuencia_id)
+            if tenant_id and sec.get("tenant_id") not in tenants:
+                raise HTTPException(status_code=403, detail="La secuencia no pertenece al workspace solicitado.")
+            return sequence_engine.execute_next_step(secuencia_id, tenant_id=target_tenant)
 
-    now_iso = datetime.now().isoformat()
-    with get_db() as conn:
-        cursor = conn.cursor()
-        placeholders = ", ".join(["?"] * len(tenants))
-        cursor.execute(
-            f"""
-            SELECT ls.secuencia_id
-            FROM leads_en_secuencia ls
-            JOIN secuencias s ON ls.secuencia_id = s.id
-            WHERE ls.estado = 'EN_CURSO'
-              AND s.activa = 1
-              AND s.estado = 'PUBLICADA'
-              AND ls.proxima_ejecucion_at <= ?
-              AND s.tenant_id IN ({placeholders})
-            ORDER BY ls.proxima_ejecucion_at ASC
-            LIMIT 1
-            """,
-            [now_iso] + list(tenants)
-        )
-        row = cursor.fetchone()
-    if not row:
-        return {
-            "status": "idle",
-            "mensaje": "No hay prospectos con pasos pendientes listos para ejecutar en este momento (o están en período de espera)."
-        }
-    return sequence_engine.execute_next_step(row["secuencia_id"])
+        now_iso = datetime.now().isoformat()
+        with get_db() as conn:
+            cursor = conn.cursor()
+            placeholders = ", ".join(["?"] * len(tenants))
+            cursor.execute(
+                f"""
+                SELECT ls.secuencia_id
+                FROM leads_en_secuencia ls
+                JOIN secuencias s ON ls.secuencia_id = s.id
+                WHERE ls.estado = 'EN_CURSO'
+                  AND s.activa = 1
+                  AND s.estado = 'PUBLICADA'
+                  AND ls.proxima_ejecucion_at <= ?
+                  AND s.tenant_id IN ({placeholders})
+                ORDER BY ls.proxima_ejecucion_at ASC
+                LIMIT 1
+                """,
+                [now_iso] + list(tenants)
+            )
+            row = cursor.fetchone()
+        if not row:
+            return {
+                "status": "idle",
+                "mensaje": "No hay prospectos con pasos pendientes listos para ejecutar en este momento (o están en período de espera)."
+            }
+        return sequence_engine.execute_next_step(row["secuencia_id"], tenant_id=target_tenant)
 
 @app.post("/api/secuencias/{secuencia_id}/estado")
 def change_sequence_status_endpoint(

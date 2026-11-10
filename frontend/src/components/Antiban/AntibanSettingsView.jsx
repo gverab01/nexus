@@ -35,6 +35,7 @@ import {
 } from '../../services/api';
 import TaskPoliciesConfigurator from './TaskPoliciesConfigurator';
 import ScheduleConfigurator from './ScheduleConfigurator';
+import InviteQuotaConfigurator from './InviteQuotaConfigurator';
 
 /**
  * Centro de Monitoreo de Seguridad Antiban & Blindaje Autónomo (NexusReach Pro)
@@ -402,6 +403,13 @@ export default function AntibanSettingsView({ activeTenantWorkspace = '' }) {
       {/* Configurador de Jornada y Horarios de Operación */}
       <ScheduleConfigurator
         scheduleData={safetyData.rawHorario}
+        onUpdated={loadAllSafetyData}
+      />
+
+      {/* Configurador de Cuota Diaria de Invitaciones LinkedIn */}
+      <InviteQuotaConfigurator
+        safetyData={safetyData}
+        warmupData={warmupData}
         onUpdated={loadAllSafetyData}
       />
 

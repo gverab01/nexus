@@ -1424,7 +1424,7 @@ def get_safety_status():
             },
             "limites_diarios": {
                 "activos": config.get("limites_diarios_activos", "1") == "1",
-                "limite_linkedin": int(config.get("limite_linkedin_diario", 5)),
+                "limite_linkedin": int(config.get("limite_linkedin_diario", diag_linkedin.get("limite_diario", 15))),
                 "limite_email": int(config.get("limite_email_workspace_diario", 15)),
                 "limite_whatsapp": int(config.get("whatsapp_cuota_diaria", config.get("whatsapp_limite_diario", 15)))
             },
@@ -1489,6 +1489,18 @@ def update_safety_config(
 
         if not updated:
             raise HTTPException(status_code=400, detail="Se requiere clave y valor o un cuerpo JSON con las configuraciones")
+
+        if "limite_linkedin_diario" in updated or "linkedin_warmup_limite_actual" in updated:
+            try:
+                new_lim = int(updated.get("limite_linkedin_diario") or updated.get("linkedin_warmup_limite_actual", 15))
+                now_iso = datetime.now().isoformat()
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE linkedin_accounts 
+                    SET daily_invite_limit = ?, updated_at = ?
+                """, (new_lim, now_iso))
+            except Exception:
+                pass
 
         return {"status": "ok", "actualizados": updated}
 

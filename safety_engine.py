@@ -280,13 +280,16 @@ def check_linkedin_safety(conn) -> Dict[str, Any]:
             "en_horario": False
         }
 
-    # 3. Daily Invitation Limit (Con Curva de Calentamiento Warm-up)
+    # 3. Daily Invitation Limit (Con Curva de Calentamiento Warm-up o Límite Manual)
     limites_activos = cfg.get("limites_diarios_activos", "1") == "1"
+    custom_limit = cfg.get("limite_linkedin_diario") or cfg.get("linkedin_warmup_limite_actual")
     warmup_status = get_linkedin_warmup_status(conn)
-    if warmup_status.get("activo"):
+    if custom_limit and str(custom_limit).strip().isdigit() and int(custom_limit) > 0:
+        daily_limit = int(custom_limit)
+    elif warmup_status.get("activo"):
         daily_limit = warmup_status["limite_sugerido"]
     else:
-        daily_limit = int(cfg.get("limite_linkedin_diario", "5"))
+        daily_limit = int(cfg.get("limite_linkedin_diario", "15"))
 
     today_iso = date.today().isoformat()
     cursor.execute("""
@@ -559,7 +562,7 @@ def get_linkedin_warmup_status(conn=None, config: Optional[Dict[str, str]] = Non
     lim_sem4 = int(cfg.get("linkedin_warmup_limite_semana_4", 25))
 
     # Soporte para override custom directo si existe
-    custom_warmup = cfg.get("linkedin_warmup_limite_actual") or cfg.get("linkedin_warmup_limite_custom")
+    custom_warmup = cfg.get("limite_linkedin_diario") or cfg.get("linkedin_warmup_limite_actual") or cfg.get("linkedin_warmup_limite_custom")
 
     if custom_warmup and str(custom_warmup).strip().isdigit() and int(custom_warmup) > 0:
         limite = int(custom_warmup)
@@ -898,8 +901,15 @@ def calculate_adaptive_warmup_limit(account_id: str, tenant_id: str, conn=None) 
             health = calculate_account_health(account_id, tenant_id, conn=conn)
             score = health["health_score"]
 
-        # Regla de escalamiento condicionado a salud
-        if score < 50.0:
+        # Límite configurable por el usuario o derivado de curva de calentamiento
+        custom_limit = cfg.get("limite_linkedin_diario") or cfg.get("linkedin_warmup_limite_actual")
+        warmup_active = cfg.get("linkedin_warmup_activo", "1") == "1"
+
+        if custom_limit and str(custom_limit).strip().isdigit() and int(custom_limit) > 0:
+            limit = int(custom_limit)
+            escalamiento = True
+            motivo = f"Límite diario personalizado por el usuario ({limit}/día)."
+        elif score < 50.0:
             limit = 10
             escalamiento = False
             motivo = f"Puntaje de salud crítico ({score}/100): Límite reducido a 10/día por seguridad."

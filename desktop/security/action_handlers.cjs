@@ -295,51 +295,150 @@ async function handleLinkedInSendInvite(win, params) {
 
   const note = params.note || params.nota || '';
 
-  // Búsqueda y clic en botón Conectar con coordenadas aleatorias
-  const clickRes = await win.webContents.executeJavaScript(`
+  // 1. Verificar si ya está en estado "Pendiente" previamente
+  const preCheck = await win.webContents.executeJavaScript(`
     (() => {
+      const allButtons = Array.from(document.querySelectorAll('button, span.artdeco-button__text'));
+      for (const b of allButtons) {
+        const txt = (b.innerText || '').trim().toLowerCase();
+        if (txt === 'pendiente' || txt === 'pending' || txt.includes('pendiente')) {
+          return { already_pending: true };
+        }
+      }
+      return { already_pending: false };
+    })()
+  `).catch(() => ({ already_pending: false }));
+
+  if (preCheck && preCheck.already_pending) {
+    return {
+      success: true,
+      result: {
+        action: 'LI_SEND_INVITE',
+        profile_url: params.profile_url || params.perfil_url,
+        status: 'ALREADY_PENDING',
+        message: 'La invitación ya se encontraba en estado Pendiente previamente.',
+        sent_at: new Date().toISOString()
+      }
+    };
+  }
+
+  // 2. Búsqueda y clic en botón Conectar (directo o dentro del menú Más)
+  const clickRes = await win.webContents.executeJavaScript(`
+    (async () => {
+      const sleepMs = (ms) => new Promise(r => setTimeout(r, ms));
+      
+      const simulateClick = (el) => {
+        const r = el.getBoundingClientRect();
+        const randX = r.left + (r.width * (0.3 + Math.random() * 0.4));
+        const randY = r.top + (r.height * (0.3 + Math.random() * 0.4));
+        el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: randX, clientY: randY }));
+        el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: randX, clientY: randY }));
+        el.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: randX, clientY: randY }));
+      };
+
+      // A) Búsqueda directa en botones visibles
       const allButtons = Array.from(document.querySelectorAll('button'));
-      const btn = allButtons.find(b => {
-        const txt = b.innerText.trim().toLowerCase();
-        return txt === 'conectar' || txt === 'connect' || txt.includes('conectar');
+      let connectBtn = allButtons.find(b => {
+        const txt = (b.innerText || '').trim().toLowerCase();
+        const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+        return (txt === 'conectar' || txt === 'connect' || aria.startsWith('invitar') || aria.startsWith('conectar'));
       });
 
-      if (!btn) {
-        return { found: false, reason: 'Botón conectar no visible directamente' };
+      if (connectBtn) {
+        const r = connectBtn.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) {
+          simulateClick(connectBtn);
+          return { found: true, method: 'direct' };
+        }
       }
 
-      const r = btn.getBoundingClientRect();
-      if (r.width === 0 || r.height === 0) {
-        return { found: false, reason: 'Botón conectar no visible' };
+      // B) Si no está directo, buscar el botón "Más" / "More" / "..." en la cabecera
+      const moreBtn = allButtons.find(b => {
+        const txt = (b.innerText || '').trim().toLowerCase();
+        const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+        return (
+          txt === 'más' || txt === 'more' || 
+          aria.includes('más acciones') || aria.includes('more actions') ||
+          b.querySelector('svg[data-test-icon="overflow-web-ios-medium"], svg[data-test-icon="overflow-web-horizontal-small"]')
+        );
+      });
+
+      if (moreBtn) {
+        simulateClick(moreBtn);
+        await sleepMs(700);
+
+        // Buscar Conectar dentro del menú desplegable abierto
+        const menuItems = Array.from(document.querySelectorAll('div[role="menu"] [role="menuitem"], div.artdeco-dropdown__content [role="button"], div.artdeco-dropdown__content span, div[role="menu"] span'));
+        const menuConnect = menuItems.find(el => {
+          const txt = (el.innerText || '').trim().toLowerCase();
+          return txt === 'conectar' || txt === 'connect' || txt.includes('conectar');
+        });
+
+        if (menuConnect) {
+          simulateClick(menuConnect);
+          return { found: true, method: 'more_menu' };
+        }
       }
 
-      const randX = r.left + (r.width * (0.25 + Math.random() * 0.5));
-      const randY = r.top + (r.height * (0.25 + Math.random() * 0.5));
-
-      btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: randX, clientY: randY }));
-      btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: randX, clientY: randY }));
-      btn.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: randX, clientY: randY }));
-
-      return { found: true };
+      return { found: false, reason: 'Botón conectar no disponible en el perfil ni en el menú Más' };
     })()
   `).catch((err) => ({ found: false, error: err.message }));
 
+  if (!clickRes || !clickRes.found) {
+    return {
+      success: false,
+      error: clickRes ? clickRes.reason || clickRes.error : 'No se pudo localizar el botón Conectar en el perfil.'
+    };
+  }
+
   await sleep(1500 + Math.random() * 1000);
 
-  // Si hay modal de confirmación o añadir nota
-  if (clickRes && clickRes.found) {
+  // 3. Inspeccionar el modal emergente y sus condiciones
+  const modalInspection = await win.webContents.executeJavaScript(`
+    (() => {
+      const modal = document.querySelector('div[role="dialog"], div.artdeco-modal');
+      if (!modal) return { has_modal: false };
+
+      const modalText = (modal.innerText || '').toLowerCase();
+
+      // Detección de barreras
+      if (modalText.includes('introduce el correo') || modalText.includes('enter the email') || modalText.includes('correo electrónico')) {
+        const closeBtn = modal.querySelector('button[aria-label*="Cerrar"], button[aria-label*="Dismiss"], button.artdeco-modal__dismiss');
+        if (closeBtn) closeBtn.click();
+        return { has_modal: true, blocked: true, reason: 'EMAIL_REQUIRED' };
+      }
+
+      if (modalText.includes('límite semanal') || modalText.includes('weekly invitation limit')) {
+        const closeBtn = modal.querySelector('button[aria-label*="Cerrar"], button[aria-label*="Dismiss"], button.artdeco-modal__dismiss');
+        if (closeBtn) closeBtn.click();
+        return { has_modal: true, blocked: true, reason: 'WEEKLY_LIMIT' };
+      }
+
+      return { has_modal: true, blocked: false };
+    })()
+  `).catch(() => ({ has_modal: false }));
+
+  if (modalInspection && modalInspection.blocked) {
+    return {
+      success: false,
+      error: `No se pudo enviar la invitación: ${modalInspection.reason === 'EMAIL_REQUIRED' ? 'LinkedIn exige el email del contacto para conectar' : 'Límite semanal alcanzado'}`
+    };
+  }
+
+  // 4. Gestión de Nota o Envío directo
+  if (modalInspection && modalInspection.has_modal) {
     if (note) {
       await win.webContents.executeJavaScript(`
         (() => {
-          const addNoteBtn = Array.from(document.querySelectorAll('button')).find(b => 
-            b.innerText.toLowerCase().includes('añadir una nota') || 
-            b.innerText.toLowerCase().includes('add a note')
-          );
+          const addNoteBtn = Array.from(document.querySelectorAll('button')).find(b => {
+            const txt = (b.innerText || '').toLowerCase();
+            return txt.includes('añadir una nota') || txt.includes('add a note');
+          });
           if (addNoteBtn) addNoteBtn.click();
         })()
       `).catch(() => {});
 
-      await sleep(800 + Math.random() * 500);
+      await sleep(900 + Math.random() * 500);
 
       const escapedNote = JSON.stringify(note);
       await win.webContents.executeJavaScript(`
@@ -353,18 +452,69 @@ async function handleLinkedInSendInvite(win, params) {
       `).catch(() => {});
 
       await sleep(1000 + Math.random() * 800);
-    }
 
-    // Confirmar envío ("Enviar" / "Send")
-    await win.webContents.executeJavaScript(`
-      (() => {
-        const sendBtn = Array.from(document.querySelectorAll('button')).find(b => {
-          const txt = b.innerText.trim().toLowerCase();
-          return txt === 'enviar' || txt === 'send' || txt === 'enviar ahora' || txt === 'send now';
-        });
-        if (sendBtn) sendBtn.click();
-      })()
-    `).catch(() => {});
+      // Clic en "Enviar" con nota
+      await win.webContents.executeJavaScript(`
+        (() => {
+          const sendBtn = Array.from(document.querySelectorAll('div[role="dialog"] button, div.artdeco-modal button')).find(b => {
+            const txt = (b.innerText || '').trim().toLowerCase();
+            return txt === 'enviar' || txt === 'send' || txt === 'enviar ahora' || txt === 'send now';
+          });
+          if (sendBtn) sendBtn.click();
+        })()
+      `).catch(() => {});
+    } else {
+      // Envío SIN nota: buscar "Enviar sin nota" o "Enviar"
+      await win.webContents.executeJavaScript(`
+        (() => {
+          const modalButtons = Array.from(document.querySelectorAll('div[role="dialog"] button, div.artdeco-modal button'));
+          let sendBtn = modalButtons.find(b => {
+            const txt = (b.innerText || '').trim().toLowerCase();
+            const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+            return txt.includes('sin nota') || aria.includes('sin nota') || txt.includes('without a note') || aria.includes('without a note');
+          });
+          if (!sendBtn) {
+            sendBtn = modalButtons.find(b => {
+              const txt = (b.innerText || '').trim().toLowerCase();
+              return txt === 'enviar' || txt === 'send';
+            });
+          }
+          if (sendBtn) {
+            sendBtn.click();
+          }
+        })()
+      `).catch(() => {});
+    }
+  }
+
+  await sleep(2000 + Math.random() * 1000);
+
+  // 5. Validación definitiva: Verificar que el botón pasó a "Pendiente" o que el modal cerró exitosamente
+  const verifyRes = await win.webContents.executeJavaScript(`
+    (() => {
+      const allTexts = Array.from(document.querySelectorAll('button, span.artdeco-button__text, div.artdeco-modal'));
+      let isPending = false;
+      let modalStillOpen = false;
+
+      for (const el of allTexts) {
+        const txt = (el.innerText || '').trim().toLowerCase();
+        if (txt === 'pendiente' || txt === 'pending' || txt.includes('pendiente')) {
+          isPending = true;
+        }
+        if (el.classList.contains('artdeco-modal') && el.getBoundingClientRect().height > 0) {
+          modalStillOpen = true;
+        }
+      }
+
+      return { isPending, modalStillOpen };
+    })()
+  `).catch(() => ({ isPending: false, modalStillOpen: false }));
+
+  if (verifyRes.modalStillOpen && !verifyRes.isPending) {
+    return {
+      success: false,
+      error: 'La ventana modal de invitación no se cerró correctamente al intentar el envío.'
+    };
   }
 
   return {
@@ -372,7 +522,8 @@ async function handleLinkedInSendInvite(win, params) {
     result: {
       action: 'LI_SEND_INVITE',
       profile_url: params.profile_url || params.perfil_url,
-      button_clicked: clickRes ? clickRes.found : false,
+      method: clickRes.method,
+      verified_pending: verifyRes.isPending,
       has_note: Boolean(note),
       sent_at: new Date().toISOString()
     }

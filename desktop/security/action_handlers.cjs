@@ -285,7 +285,7 @@ async function handleLinkedInVisit(win, params) {
 }
 
 /**
- * 2. LI_SEND_INVITE: Envía invitación orgánica con clic biométrico
+ * 2. LI_SEND_INVITE: Envía invitación orgánica con clic biométrico y verificación estricta
  */
 async function handleLinkedInSendInvite(win, params) {
   const visitResult = await handleLinkedInVisit(win, params);
@@ -295,16 +295,26 @@ async function handleLinkedInSendInvite(win, params) {
 
   const note = params.note || params.nota || '';
 
+  // 0. Asegurar que la página está al tope absoluto para que la cabecera sea 100% visible
+  await win.webContents.executeJavaScript(`
+    (() => {
+      window.scrollTo({ top: 0, behavior: 'instant' });
+      return true;
+    })()
+  `).catch(() => {});
+  await sleep(500);
+
   // 1. Verificar si la cabecera del lead principal ya está en estado "Pendiente" previamente
   const preCheck = await win.webContents.executeJavaScript(`
     (() => {
-      const allButtons = Array.from(document.querySelectorAll('button, span.artdeco-button__text'));
+      const allButtons = Array.from(document.querySelectorAll('button, a[role="button"], span.artdeco-button__text'));
       for (const b of allButtons) {
         if (b.closest('aside, .scaffold-layout__aside, [data-view-name="profile-component-entity"], header, nav, #global-nav, footer, .msg-overlay-container, #msg-overlay')) continue;
         const r = b.getBoundingClientRect();
         if (r.top >= 850 || r.top < 0 || r.width === 0) continue;
         const txt = (b.innerText || b.textContent || '').trim().toLowerCase();
-        if (txt === 'pendiente' || txt === 'pending') {
+        const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+        if (txt === 'pendiente' || txt === 'pending' || aria.includes('pendiente') || aria.includes('pending') || txt.includes('retirar') || aria.includes('retirar')) {
           return { already_pending: true };
         }
       }
@@ -319,6 +329,7 @@ async function handleLinkedInSendInvite(win, params) {
         action: 'LI_SEND_INVITE',
         profile_url: params.profile_url || params.perfil_url,
         status: 'ALREADY_PENDING',
+        verified_pending: true,
         message: 'La invitación ya se encontraba en estado Pendiente previamente en el perfil.',
         sent_at: new Date().toISOString()
       }
@@ -331,21 +342,26 @@ async function handleLinkedInSendInvite(win, params) {
       const sleepMs = (ms) => new Promise(r => setTimeout(r, ms));
       
       const simulateClick = (el) => {
+        el.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
         const r = el.getBoundingClientRect();
         const randX = r.left + (r.width * (0.3 + Math.random() * 0.4));
         const randY = r.top + (r.height * (0.3 + Math.random() * 0.4));
-        el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: randX, clientY: randY }));
-        el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: randX, clientY: randY }));
+        el.focus();
+        el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, view: window, clientX: randX, clientY: randY }));
+        el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window, clientX: randX, clientY: randY }));
+        el.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, view: window, clientX: randX, clientY: randY }));
+        el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window, clientX: randX, clientY: randY }));
         el.click();
       };
 
       const isConnectBtn = (btn) => {
         const txt = (btn.innerText || btn.textContent || '').trim().toLowerCase();
         const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
-        const combined = txt + ' ' + aria;
+        const title = (btn.getAttribute('title') || '').toLowerCase();
+        const combined = txt + ' ' + aria + ' ' + title;
 
-        const hasConnect = combined.includes('conectar') || combined.includes('connect') || aria.includes('invitar');
-        const isExcluded = combined.includes('en común') || combined.includes('contactos en común') || combined.includes('mensaje') || combined.includes('message') || combined.includes('retirar');
+        const hasConnect = combined.includes('conectar') || combined.includes('connect') || aria.includes('invitar') || aria.includes('invite');
+        const isExcluded = combined.includes('en común') || combined.includes('contactos en común') || combined.includes('mensaje') || combined.includes('message') || combined.includes('retirar') || combined.includes('withdraw') || combined.includes('siguiendo') || combined.includes('following');
         return hasConnect && !isExcluded;
       };
 
@@ -412,83 +428,152 @@ async function handleLinkedInSendInvite(win, params) {
     };
   }
 
-  await sleep(1500 + Math.random() * 1000);
+  // 3. Inspeccionar el modal emergente y sus condiciones con polling activo (hasta 4 segundos)
+  let modalFound = false;
+  let directPending = false;
 
-  // 3. Inspeccionar el modal emergente y sus condiciones
-  const modalInspection = await win.webContents.executeJavaScript(`
-    (() => {
-      const modal = document.querySelector('div[role="dialog"], div.artdeco-modal');
-      if (!modal) return { has_modal: false };
+  for (let m = 0; m < 8; m++) {
+    await sleep(500);
+    const modalInspection = await win.webContents.executeJavaScript(`
+      (() => {
+        const modal = document.querySelector('div[role="dialog"], div.artdeco-modal');
+        if (modal && modal.getBoundingClientRect().height > 0) {
+          const modalText = (modal.innerText || '').toLowerCase();
 
-      const modalText = (modal.innerText || '').toLowerCase();
+          // Detección de barreras
+          if (modalText.includes('introduce el correo') || modalText.includes('enter the email') || modalText.includes('correo electrónico')) {
+            const closeBtn = modal.querySelector('button[aria-label*="Cerrar"], button[aria-label*="Dismiss"], button.artdeco-modal__dismiss');
+            if (closeBtn) closeBtn.click();
+            return { has_modal: true, blocked: true, reason: 'EMAIL_REQUIRED' };
+          }
 
-      // Detección de barreras
-      if (modalText.includes('introduce el correo') || modalText.includes('enter the email') || modalText.includes('correo electrónico')) {
-        const closeBtn = modal.querySelector('button[aria-label*="Cerrar"], button[aria-label*="Dismiss"], button.artdeco-modal__dismiss');
-        if (closeBtn) closeBtn.click();
-        return { has_modal: true, blocked: true, reason: 'EMAIL_REQUIRED' };
-      }
+          if (modalText.includes('límite semanal') || modalText.includes('weekly invitation limit')) {
+            const closeBtn = modal.querySelector('button[aria-label*="Cerrar"], button[aria-label*="Dismiss"], button.artdeco-modal__dismiss');
+            if (closeBtn) closeBtn.click();
+            return { has_modal: true, blocked: true, reason: 'WEEKLY_LIMIT' };
+          }
 
-      if (modalText.includes('límite semanal') || modalText.includes('weekly invitation limit')) {
-        const closeBtn = modal.querySelector('button[aria-label*="Cerrar"], button[aria-label*="Dismiss"], button.artdeco-modal__dismiss');
-        if (closeBtn) closeBtn.click();
-        return { has_modal: true, blocked: true, reason: 'WEEKLY_LIMIT' };
-      }
+          return { has_modal: true, blocked: false };
+        }
 
-      return { has_modal: true, blocked: false };
-    })()
-  `).catch(() => ({ has_modal: false }));
+        // Si no hay modal, verificar si pasó inmediatamente a pendiente (conexión directa sin modal)
+        const allButtons = Array.from(document.querySelectorAll('button, a[role="button"], span.artdeco-button__text'));
+        for (const b of allButtons) {
+          if (b.closest('aside, .scaffold-layout__aside, [data-view-name="profile-component-entity"], header, nav, #global-nav, footer, .msg-overlay-container, #msg-overlay')) continue;
+          const r = b.getBoundingClientRect();
+          if (r.top >= 850 || r.top < 0 || r.width === 0) continue;
+          const txt = (b.innerText || b.textContent || '').trim().toLowerCase();
+          const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+          if (txt === 'pendiente' || txt === 'pending' || aria.includes('pendiente') || aria.includes('pending') || txt.includes('retirar') || aria.includes('retirar')) {
+            return { has_modal: false, direct_pending: true };
+          }
+        }
 
-  if (modalInspection && modalInspection.blocked) {
-    return {
-      success: false,
-      error: `No se pudo enviar la invitación: ${modalInspection.reason === 'EMAIL_REQUIRED' ? 'LinkedIn exige el email del contacto para conectar' : 'Límite semanal alcanzado'}`
-    };
+        return { has_modal: false, direct_pending: false };
+      })()
+    `).catch(() => ({ has_modal: false, direct_pending: false }));
+
+    if (modalInspection && modalInspection.blocked) {
+      return {
+        success: false,
+        error: `No se pudo enviar la invitación: ${modalInspection.reason === 'EMAIL_REQUIRED' ? 'LinkedIn exige el email del contacto para conectar' : 'Límite semanal alcanzado'}`,
+        blocked_reason: modalInspection.reason
+      };
+    }
+
+    if (modalInspection && modalInspection.has_modal) {
+      modalFound = true;
+      break;
+    }
+
+    if (modalInspection && modalInspection.direct_pending) {
+      directPending = true;
+      break;
+    }
   }
 
-  // 4. Gestión de Nota o Envío directo
-  if (modalInspection && modalInspection.has_modal) {
+  // 4. Gestión de Nota o Envío directo en la ventana modal
+  if (modalFound) {
     if (note) {
       await win.webContents.executeJavaScript(`
         (() => {
+          const simulateClick = (el) => {
+            el.focus();
+            el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, view: window }));
+            el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+            el.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, view: window }));
+            el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+            el.click();
+          };
+
           const addNoteBtn = Array.from(document.querySelectorAll('div[role="dialog"] button, div.artdeco-modal button')).find(b => {
             const txt = (b.innerText || '').toLowerCase();
-            return txt.includes('añadir una nota') || txt.includes('add a note');
+            const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+            return txt.includes('añadir una nota') || txt.includes('add a note') || aria.includes('nota') || aria.includes('note');
           });
-          if (addNoteBtn) addNoteBtn.click();
+          if (addNoteBtn) simulateClick(addNoteBtn);
         })()
       `).catch(() => {});
 
-      await sleep(900 + Math.random() * 500);
+      await sleep(1000 + Math.random() * 500);
 
       const escapedNote = JSON.stringify(note);
       await win.webContents.executeJavaScript(`
         (() => {
           const textarea = document.querySelector('div[role="dialog"] textarea, div.artdeco-modal textarea');
           if (textarea) {
+            textarea.focus();
             textarea.value = ${escapedNote};
             textarea.dispatchEvent(new Event('input', { bubbles: true }));
+            textarea.dispatchEvent(new Event('change', { bubbles: true }));
           }
         })()
       `).catch(() => {});
 
-      await sleep(1000 + Math.random() * 800);
+      await sleep(1000 + Math.random() * 500);
 
-      // Clic en "Enviar" con nota
+      // Clic en "Enviar" con nota usando simulateClick
       await win.webContents.executeJavaScript(`
         (() => {
-          const sendBtn = Array.from(document.querySelectorAll('div[role="dialog"] button, div.artdeco-modal button')).find(b => {
+          const simulateClick = (el) => {
+            el.focus();
+            el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, view: window }));
+            el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+            el.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, view: window }));
+            el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+            el.click();
+          };
+
+          const modal = document.querySelector('div[role="dialog"], div.artdeco-modal');
+          if (!modal) return;
+          const modalButtons = Array.from(modal.querySelectorAll('button'));
+          let sendBtn = modalButtons.find(b => {
             const txt = (b.innerText || '').trim().toLowerCase();
-            return txt === 'enviar' || txt === 'send' || txt === 'enviar ahora' || txt === 'send now';
+            const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+            return txt === 'enviar' || txt === 'send' || txt === 'enviar ahora' || txt === 'send now' || aria.includes('enviar');
           });
-          if (sendBtn) sendBtn.click();
+          if (!sendBtn) {
+            sendBtn = modal.querySelector('button.artdeco-button--primary');
+          }
+          if (sendBtn) simulateClick(sendBtn);
         })()
       `).catch(() => {});
     } else {
-      // Envío SIN nota: buscar "Enviar sin nota" o "Enviar"
+      // Envío SIN nota: buscar "Enviar sin nota" o fallback a primary button
       await win.webContents.executeJavaScript(`
         (() => {
-          const modalButtons = Array.from(document.querySelectorAll('div[role="dialog"] button, div.artdeco-modal button'));
+          const simulateClick = (el) => {
+            el.focus();
+            el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, view: window }));
+            el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+            el.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, view: window }));
+            el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+            el.click();
+          };
+
+          const modal = document.querySelector('div[role="dialog"], div.artdeco-modal');
+          if (!modal) return;
+          const modalButtons = Array.from(modal.querySelectorAll('button'));
           let sendBtn = modalButtons.find(b => {
             const txt = (b.innerText || '').trim().toLowerCase();
             const aria = (b.getAttribute('aria-label') || '').toLowerCase();
@@ -497,49 +582,72 @@ async function handleLinkedInSendInvite(win, params) {
           if (!sendBtn) {
             sendBtn = modalButtons.find(b => {
               const txt = (b.innerText || '').trim().toLowerCase();
-              return txt === 'enviar' || txt === 'send';
+              return txt === 'enviar' || txt === 'send' || txt === 'enviar ahora' || txt === 'send now';
             });
           }
+          if (!sendBtn) {
+            sendBtn = modal.querySelector('button.artdeco-button--primary');
+          }
           if (sendBtn) {
-            sendBtn.click();
+            simulateClick(sendBtn);
           }
         })()
       `).catch(() => {});
     }
   }
 
-  await sleep(2000 + Math.random() * 1000);
+  // 5. Validación definitiva: Polling activo (hasta 8 segundos) verificando que el botón pasó a "Pendiente"
+  let verifiedPending = directPending;
+  let modalStillOpen = false;
 
-  // 5. Validación definitiva: Verificar que el botón de la cabecera del lead pasó a "Pendiente"
-  const verifyRes = await win.webContents.executeJavaScript(`
-    (() => {
-      const allButtons = Array.from(document.querySelectorAll('button, span.artdeco-button__text'));
-      let isPending = false;
-      let modalStillOpen = false;
+  if (!verifiedPending) {
+    for (let i = 0; i < 10; i++) {
+      await sleep(800);
+      const verifyRes = await win.webContents.executeJavaScript(`
+        (() => {
+          const allButtons = Array.from(document.querySelectorAll('button, a[role="button"], span.artdeco-button__text'));
+          let isPending = false;
+          let modalOpen = false;
 
-      for (const el of allButtons) {
-        if (el.closest('aside, .scaffold-layout__aside, [data-view-name="profile-component-entity"], header, nav, #global-nav, footer, .msg-overlay-container, #msg-overlay')) continue;
-        const r = el.getBoundingClientRect();
-        if (r.top >= 850 || r.top < 0 || r.width === 0) continue;
-        const txt = (el.innerText || el.textContent || '').trim().toLowerCase();
-        if (txt === 'pendiente' || txt === 'pending') {
-          isPending = true;
-        }
+          for (const el of allButtons) {
+            if (el.closest('aside, .scaffold-layout__aside, [data-view-name="profile-component-entity"], header, nav, #global-nav, footer, .msg-overlay-container, #msg-overlay')) continue;
+            const r = el.getBoundingClientRect();
+            if (r.top >= 850 || r.top < 0 || r.width === 0) continue;
+            const txt = (el.innerText || el.textContent || '').trim().toLowerCase();
+            const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+            if (txt === 'pendiente' || txt === 'pending' || aria.includes('pendiente') || aria.includes('pending') || txt.includes('retirar') || aria.includes('retirar')) {
+              isPending = true;
+              break;
+            }
+          }
+
+          const modal = document.querySelector('div.artdeco-modal, div[role="dialog"]');
+          if (modal && modal.getBoundingClientRect().height > 0) {
+            modalOpen = true;
+          }
+
+          return { isPending, modalOpen };
+        })()
+      `).catch(() => ({ isPending: false, modalOpen: false }));
+
+      if (verifyRes.isPending) {
+        verifiedPending = true;
+        modalStillOpen = verifyRes.modalOpen;
+        break;
       }
+      modalStillOpen = verifyRes.modalOpen;
+    }
+  }
 
-      const modal = document.querySelector('div.artdeco-modal, div[role="dialog"]');
-      if (modal && modal.getBoundingClientRect().height > 0) {
-        modalStillOpen = true;
-      }
-
-      return { isPending, modalStillOpen };
-    })()
-  `).catch(() => ({ isPending: false, modalStillOpen: false }));
-
-  if (verifyRes.modalStillOpen && !verifyRes.isPending) {
+  // REGLA DE ORO TERMINANTE: SI LINKEDIN NO CONFIRMA "PENDIENTE", NUNCA RETORNAR ÉXITO. CERO FALSOS POSITIVOS.
+  if (!verifiedPending) {
     return {
       success: false,
-      error: 'La ventana modal de invitación no se cerró correctamente al intentar el envío.'
+      error: modalStillOpen
+        ? 'La ventana modal de invitación no se cerró correctamente al intentar el envío.'
+        : 'La invitación no pudo ser confirmada en LinkedIn: el botón del perfil no pasó a estado "Pendiente".',
+      verified_pending: false,
+      method: clickRes.method
     };
   }
 
@@ -549,7 +657,7 @@ async function handleLinkedInSendInvite(win, params) {
       action: 'LI_SEND_INVITE',
       profile_url: params.profile_url || params.perfil_url,
       method: clickRes.method,
-      verified_pending: verifyRes.isPending,
+      verified_pending: true,
       has_note: Boolean(note),
       sent_at: new Date().toISOString()
     }
@@ -572,7 +680,8 @@ async function handleLinkedInSendMessage(win, params) {
   const visitRes = await handleLinkedInVisit(win, { profile_url: profileUrl });
   if (!visitRes.success) return visitRes;
 
-  await sleep(1500);
+  await win.webContents.executeJavaScript(`window.scrollTo({ top: 0, behavior: 'instant' });`).catch(() => {});
+  await sleep(600);
 
   const escapedMsg = JSON.stringify(message);
   const msgResult = await win.webContents.executeJavaScript(`
@@ -2054,6 +2163,9 @@ async function handleZohoBridgeAction(win, action, params) {
 
 module.exports = {
   executeAction,
+  handleLinkedInVisit,
+  handleLinkedInSendInvite,
+  handleLinkedInSendMessage,
   handleLinkedInExtractNetwork,
   handleLinkedInEnrichProfile,
   handleLinkedInReadContactInfo,

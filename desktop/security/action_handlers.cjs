@@ -130,23 +130,47 @@ async function handleLinkedInVisit(win, params) {
     return { success: false, error: check.reason || 'URL no permitida por Allowlist Guard' };
   }
 
-  // 0. Asegurar sincronización de sesión viva si li_at está en defaultSession
+  // 0. Asegurar sincronización de sesión viva si li_at está en particiones legacy o defaultSession
   try {
     const { session } = require('electron');
     if (session && win && win.webContents && win.webContents.session) {
       const curCookies = await win.webContents.session.cookies.get({ domain: '.linkedin.com' });
       const hasLiAt = curCookies.some(c => c.name === 'li_at');
-      if (!hasLiAt && session.defaultSession) {
-        const defCookies = await session.defaultSession.cookies.get({ domain: '.linkedin.com' });
-        for (const c of defCookies) {
-          const scheme = c.secure ? 'https://' : 'http://';
-          const domain = c.domain.replace(/^\./, '');
-          const url = `${scheme}${domain}${c.path || '/'}`;
-          await win.webContents.session.cookies.set({
-            url, name: c.name, value: c.value, domain: c.domain,
-            path: c.path, secure: c.secure, httpOnly: c.httpOnly,
-            expirationDate: c.expirationDate, sameSite: c.sameSite
-          }).catch(() => {});
+      if (!hasLiAt) {
+        const fallbackSources = ['persist:nexusreach_work_session', 'persist:dripify_work_session'];
+        for (const fSource of fallbackSources) {
+          try {
+            const fSes = session.fromPartition(fSource);
+            const fCookies = await fSes.cookies.get({ domain: '.linkedin.com' });
+            if (fCookies.some(c => c.name === 'li_at')) {
+              for (const c of fCookies) {
+                const scheme = c.secure ? 'https://' : 'http://';
+                const domain = c.domain.replace(/^\./, '');
+                const url = `${scheme}${domain}${c.path || '/'}`;
+                await win.webContents.session.cookies.set({
+                  url, name: c.name, value: c.value, domain: c.domain,
+                  path: c.path, secure: c.secure, httpOnly: c.httpOnly,
+                  expirationDate: c.expirationDate, sameSite: c.sameSite
+                }).catch(() => {});
+              }
+              break;
+            }
+          } catch (_) {}
+        }
+        if (session.defaultSession) {
+          const defCookies = await session.defaultSession.cookies.get({ domain: '.linkedin.com' });
+          if (defCookies.some(c => c.name === 'li_at')) {
+            for (const c of defCookies) {
+              const scheme = c.secure ? 'https://' : 'http://';
+              const domain = c.domain.replace(/^\./, '');
+              const url = `${scheme}${domain}${c.path || '/'}`;
+              await win.webContents.session.cookies.set({
+                url, name: c.name, value: c.value, domain: c.domain,
+                path: c.path, secure: c.secure, httpOnly: c.httpOnly,
+                expirationDate: c.expirationDate, sameSite: c.sameSite
+              }).catch(() => {});
+            }
+          }
         }
       }
     }
@@ -402,8 +426,8 @@ async function handleLinkedInSendInvite(win, params) {
         );
       };
 
-      // 1. Obtener todos los botones candidatos del perfil
-      const allButtons = Array.from(document.querySelectorAll('button, a[role="button"]'));
+      // 1. Obtener todos los botones y enlaces candidatos del perfil (incluye <a> sin role="button" de la nueva UI)
+      const allButtons = Array.from(document.querySelectorAll('button, a, div[role="button"]'));
 
       // 2. Filtrar terminantemente los botones que pertenecen al sidebar (aside), sugeridos, header/nav y chat
       const heroButtons = allButtons.filter(b => {
@@ -436,14 +460,14 @@ async function handleLinkedInSendInvite(win, params) {
           await sleepMs(300);
           const dropdownMenu = document.querySelector('div.artdeco-dropdown__content--is-open, div[role="menu"], div.artdeco-dropdown__content, .pvs-overflow-actions-dropdown__content');
           if (dropdownMenu) {
-            const menuItems = Array.from(dropdownMenu.querySelectorAll('[role="menuitem"], [role="button"], span, div.artdeco-dropdown__item, button, li, div'));
+            const menuItems = Array.from(dropdownMenu.querySelectorAll('[role="menuitem"], [role="button"], span, div.artdeco-dropdown__item, button, a, li, div'));
             menuConnect = menuItems.find(isConnectBtn);
             if (menuConnect) break;
           }
         }
 
         if (menuConnect) {
-          const clickTarget = menuConnect.closest('[role="button"], div.artdeco-dropdown__item, li, button') || menuConnect;
+          const clickTarget = menuConnect.closest('[role="button"], div.artdeco-dropdown__item, li, button, a') || menuConnect;
           simulateClick(clickTarget);
           return { found: true, method: 'more_menu' };
         }
@@ -468,8 +492,14 @@ async function handleLinkedInSendInvite(win, params) {
     await sleep(500);
     const modalInspection = await win.webContents.executeJavaScript(`
       (() => {
-        const modal = document.querySelector('div[role="dialog"], div.artdeco-modal');
-        if (modal && modal.getBoundingClientRect().height > 0) {
+        const modals = Array.from(document.querySelectorAll('div[role="dialog"], dialog, div.artdeco-modal'));
+        const modal = modals.find(m => {
+          if (m.classList.contains('vjs-modal-dialog')) return false;
+          const r = m.getBoundingClientRect();
+          return r.height > 0 && r.width > 0;
+        });
+
+        if (modal) {
           const modalText = (modal.innerText || '').toLowerCase();
 
           // Detección de barreras
@@ -489,11 +519,11 @@ async function handleLinkedInSendInvite(win, params) {
         }
 
         // Si no hay modal, verificar si pasó inmediatamente a pendiente (conexión directa sin modal)
-        const allButtons = Array.from(document.querySelectorAll('button, a[role="button"], span.artdeco-button__text'));
+        const allButtons = Array.from(document.querySelectorAll('button, a, span'));
         for (const b of allButtons) {
           if (b.closest('aside, .scaffold-layout__aside, [data-view-name="profile-component-entity"], header, nav, #global-nav, footer, .msg-overlay-container, #msg-overlay')) continue;
           const r = b.getBoundingClientRect();
-          if (r.top >= 850 || r.top < 0 || r.width === 0) continue;
+          if (r.top >= 1300 || r.top < 0 || r.width === 0) continue;
           const txt = (b.innerText || b.textContent || '').trim().toLowerCase();
           const aria = (b.getAttribute('aria-label') || '').toLowerCase();
           if (txt === 'pendiente' || txt === 'pending' || aria.includes('pendiente') || aria.includes('pending') || txt.includes('retirar') || aria.includes('retirar')) {
@@ -591,37 +621,22 @@ async function handleLinkedInSendInvite(win, params) {
         })()
       `).catch(() => {});
     } else {
-      // Envío SIN nota: buscar "Enviar sin nota" o fallback a primary button
+      // Envío SIN nota: buscar "Enviar sin nota" o fallback a botón primario de envío
       await win.webContents.executeJavaScript(`
         (() => {
-          const simulateClick = (el) => {
-            el.focus();
-            el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, view: window }));
-            el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-            el.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, view: window }));
-            el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
-            el.click();
-          };
-
-          const modal = document.querySelector('div[role="dialog"], div.artdeco-modal');
-          if (!modal) return;
-          const modalButtons = Array.from(modal.querySelectorAll('button'));
-          let sendBtn = modalButtons.find(b => {
+          const allButtons = Array.from(document.querySelectorAll('button, a'));
+          const sendBtn = allButtons.find(b => {
             const txt = (b.innerText || '').trim().toLowerCase();
             const aria = (b.getAttribute('aria-label') || '').toLowerCase();
             return txt.includes('sin nota') || aria.includes('sin nota') || txt.includes('without a note') || aria.includes('without a note');
+          }) || allButtons.find(b => {
+            const txt = (b.innerText || '').trim().toLowerCase();
+            return txt === 'enviar' || txt === 'send' || txt === 'enviar ahora' || txt === 'send now';
           });
-          if (!sendBtn) {
-            sendBtn = modalButtons.find(b => {
-              const txt = (b.innerText || '').trim().toLowerCase();
-              return txt === 'enviar' || txt === 'send' || txt === 'enviar ahora' || txt === 'send now';
-            });
-          }
-          if (!sendBtn) {
-            sendBtn = modal.querySelector('button.artdeco-button--primary');
-          }
+
           if (sendBtn) {
-            simulateClick(sendBtn);
+            sendBtn.focus();
+            sendBtn.click();
           }
         })()
       `).catch(() => {});
@@ -637,7 +652,7 @@ async function handleLinkedInSendInvite(win, params) {
       await sleep(800);
       const verifyRes = await win.webContents.executeJavaScript(`
         (() => {
-          const allButtons = Array.from(document.querySelectorAll('button, a[role="button"], span.artdeco-button__text'));
+          const allButtons = Array.from(document.querySelectorAll('button, a, span'));
           let isPending = false;
           let modalOpen = false;
 
@@ -653,10 +668,8 @@ async function handleLinkedInSendInvite(win, params) {
             }
           }
 
-          const modal = document.querySelector('div.artdeco-modal, div[role="dialog"]');
-          if (modal && modal.getBoundingClientRect().height > 0) {
-            modalOpen = true;
-          }
+          const modals = Array.from(document.querySelectorAll('div[role="dialog"], dialog, div.artdeco-modal'));
+          modalOpen = modals.some(m => !m.classList.contains('vjs-modal-dialog') && m.getBoundingClientRect().height > 0);
 
           return { isPending, modalOpen };
         })()

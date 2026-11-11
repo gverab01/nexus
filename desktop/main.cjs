@@ -200,23 +200,49 @@ function setupSessionGuardsAndListeners() {
   // Sincronizar automáticamente sesión auténtica de LinkedIn si la partición no tiene li_at
   (async () => {
     try {
-      const defSession = session.defaultSession;
       const targetCookies = await liSession.cookies.get({ domain: '.linkedin.com' });
       const hasTargetLiAt = targetCookies.some(c => c.name === 'li_at');
 
-      if (!hasTargetLiAt && defSession) {
-        const defCookies = await defSession.cookies.get({ domain: '.linkedin.com' });
-        for (const c of defCookies) {
-          const scheme = c.secure ? 'https://' : 'http://';
-          const domain = c.domain.replace(/^\./, '');
-          const url = `${scheme}${domain}${c.path || '/'}`;
-          await liSession.cookies.set({
-            url, name: c.name, value: c.value, domain: c.domain,
-            path: c.path, secure: c.secure, httpOnly: c.httpOnly,
-            expirationDate: c.expirationDate, sameSite: c.sameSite
-          }).catch(() => {});
+      if (!hasTargetLiAt) {
+        const fallbackPartitions = ['persist:nexusreach_work_session', 'persist:dripify_work_session'];
+        for (const fb of fallbackPartitions) {
+          try {
+            const fbSession = session.fromPartition(fb);
+            const fbCookies = await fbSession.cookies.get({ domain: '.linkedin.com' });
+            if (fbCookies.some(c => c.name === 'li_at')) {
+              for (const c of fbCookies) {
+                const scheme = c.secure ? 'https://' : 'http://';
+                const domain = c.domain.replace(/^\./, '');
+                const url = `${scheme}${domain}${c.path || '/'}`;
+                await liSession.cookies.set({
+                  url, name: c.name, value: c.value, domain: c.domain,
+                  path: c.path, secure: c.secure, httpOnly: c.httpOnly,
+                  expirationDate: c.expirationDate, sameSite: c.sameSite
+                }).catch(() => {});
+              }
+              console.log(`[Electron Sesion] Sincronizadas ${fbCookies.length} cookies de LinkedIn desde ${fb}.`);
+              break;
+            }
+          } catch (_) {}
         }
-        console.log(`[Electron Sesion] Sincronizadas ${defCookies.length} cookies de LinkedIn desde defaultSession.`);
+
+        const defSession = session.defaultSession;
+        if (defSession) {
+          const defCookies = await defSession.cookies.get({ domain: '.linkedin.com' });
+          if (defCookies.some(c => c.name === 'li_at')) {
+            for (const c of defCookies) {
+              const scheme = c.secure ? 'https://' : 'http://';
+              const domain = c.domain.replace(/^\./, '');
+              const url = `${scheme}${domain}${c.path || '/'}`;
+              await liSession.cookies.set({
+                url, name: c.name, value: c.value, domain: c.domain,
+                path: c.path, secure: c.secure, httpOnly: c.httpOnly,
+                expirationDate: c.expirationDate, sameSite: c.sameSite
+              }).catch(() => {});
+            }
+            console.log(`[Electron Sesion] Sincronizadas ${defCookies.length} cookies de LinkedIn desde defaultSession.`);
+          }
+        }
       }
     } catch (e) {
       console.warn('[Electron Sesion] Error sincronizando cookies de LinkedIn:', e.message);

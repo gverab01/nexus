@@ -197,6 +197,32 @@ function setupSessionGuardsAndListeners() {
     }
   });
 
+  // Sincronizar automáticamente sesión auténtica de LinkedIn si la partición no tiene li_at
+  (async () => {
+    try {
+      const defSession = session.defaultSession;
+      const targetCookies = await liSession.cookies.get({ domain: '.linkedin.com' });
+      const hasTargetLiAt = targetCookies.some(c => c.name === 'li_at');
+
+      if (!hasTargetLiAt && defSession) {
+        const defCookies = await defSession.cookies.get({ domain: '.linkedin.com' });
+        for (const c of defCookies) {
+          const scheme = c.secure ? 'https://' : 'http://';
+          const domain = c.domain.replace(/^\./, '');
+          const url = `${scheme}${domain}${c.path || '/'}`;
+          await liSession.cookies.set({
+            url, name: c.name, value: c.value, domain: c.domain,
+            path: c.path, secure: c.secure, httpOnly: c.httpOnly,
+            expirationDate: c.expirationDate, sameSite: c.sameSite
+          }).catch(() => {});
+        }
+        console.log(`[Electron Sesion] Sincronizadas ${defCookies.length} cookies de LinkedIn desde defaultSession.`);
+      }
+    } catch (e) {
+      console.warn('[Electron Sesion] Error sincronizando cookies de LinkedIn:', e.message);
+    }
+  })();
+
   // 2. Partición WhatsApp
   const waSession = session.fromPartition(WA_PARTITION_NAME);
   waSession.setUserAgent(cleanUserAgent);

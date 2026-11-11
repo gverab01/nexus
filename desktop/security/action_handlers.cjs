@@ -130,6 +130,28 @@ async function handleLinkedInVisit(win, params) {
     return { success: false, error: check.reason || 'URL no permitida por Allowlist Guard' };
   }
 
+  // 0. Asegurar sincronización de sesión viva si li_at está en defaultSession
+  try {
+    const { session } = require('electron');
+    if (session && win && win.webContents && win.webContents.session) {
+      const curCookies = await win.webContents.session.cookies.get({ domain: '.linkedin.com' });
+      const hasLiAt = curCookies.some(c => c.name === 'li_at');
+      if (!hasLiAt && session.defaultSession) {
+        const defCookies = await session.defaultSession.cookies.get({ domain: '.linkedin.com' });
+        for (const c of defCookies) {
+          const scheme = c.secure ? 'https://' : 'http://';
+          const domain = c.domain.replace(/^\./, '');
+          const url = `${scheme}${domain}${c.path || '/'}`;
+          await win.webContents.session.cookies.set({
+            url, name: c.name, value: c.value, domain: c.domain,
+            path: c.path, secure: c.secure, httpOnly: c.httpOnly,
+            expirationDate: c.expirationDate, sameSite: c.sameSite
+          }).catch(() => {});
+        }
+      }
+    }
+  } catch (_) {}
+
   // Navegar
   await new Promise((resolve) => {
     const timeout = setTimeout(resolve, 14000);
@@ -140,11 +162,15 @@ async function handleLinkedInVisit(win, params) {
     win.loadURL(profileUrl).catch(resolve);
   });
 
+  await sleep(2000);
   const finalUrl = win.webContents.getURL() || '';
   if (finalUrl.includes('/login') || finalUrl.includes('/authwall') || finalUrl.includes('/checkpoint')) {
+    if (typeof win.show === 'function') {
+      try { win.show(); win.focus(); } catch (_) {}
+    }
     return {
       success: false,
-      error: 'Sesión de LinkedIn no iniciada o checkpoint detectado',
+      error: 'Sesión de LinkedIn no iniciada o checkpoint detectado (Authwall). Inicia sesión en la ventana de LinkedIn.',
       checkpoint_detected: true
     };
   }
@@ -311,7 +337,7 @@ async function handleLinkedInSendInvite(win, params) {
       for (const b of allButtons) {
         if (b.closest('aside, .scaffold-layout__aside, [data-view-name="profile-component-entity"], header, nav, #global-nav, footer, .msg-overlay-container, #msg-overlay')) continue;
         const r = b.getBoundingClientRect();
-        if (r.top >= 850 || r.top < 0 || r.width === 0) continue;
+        if (r.top >= 1300 || r.top < 0 || r.width === 0) continue;
         const txt = (b.innerText || b.textContent || '').trim().toLowerCase();
         const aria = (b.getAttribute('aria-label') || '').toLowerCase();
         if (txt === 'pendiente' || txt === 'pending' || aria.includes('pendiente') || aria.includes('pending') || txt.includes('retirar') || aria.includes('retirar')) {
@@ -360,17 +386,18 @@ async function handleLinkedInSendInvite(win, params) {
         const title = (btn.getAttribute('title') || '').toLowerCase();
         const combined = txt + ' ' + aria + ' ' + title;
 
-        const hasConnect = combined.includes('conectar') || combined.includes('connect') || aria.includes('invitar') || aria.includes('invite');
-        const isExcluded = combined.includes('en común') || combined.includes('contactos en común') || combined.includes('mensaje') || combined.includes('message') || combined.includes('retirar') || combined.includes('withdraw') || combined.includes('siguiendo') || combined.includes('following');
+        const hasConnect = combined.includes('conectar') || combined.includes('connect') || combined.includes('invitar') || combined.includes('invite');
+        const isExcluded = combined.includes('en común') || combined.includes('contactos en común') || combined.includes('mensaje') || combined.includes('message') || combined.includes('retirar') || combined.includes('withdraw') || combined.includes('siguiendo') || combined.includes('following') || combined.includes('guardar') || combined.includes('save') || combined.includes('denunciar') || combined.includes('report') || combined.includes('bloquear') || combined.includes('block');
         return hasConnect && !isExcluded;
       };
 
       const isMoreBtn = (btn) => {
         const txt = (btn.innerText || btn.textContent || '').trim().toLowerCase();
         const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+        const combined = txt + ' ' + aria;
         return (
           txt === 'más' || txt === 'more' || txt === '...' ||
-          aria.includes('más') || aria.includes('more') || aria.includes('acciones') ||
+          combined.includes('más') || combined.includes('more') || combined.includes('acciones') || combined.includes('opciones') ||
           Boolean(btn.querySelector('svg[data-test-icon="overflow-web-ios-medium"], svg[data-test-icon="overflow-web-horizontal-small"], svg use[href*="overflow"]'))
         );
       };
@@ -387,8 +414,8 @@ async function handleLinkedInSendInvite(win, params) {
           return false;
         }
         const r = b.getBoundingClientRect();
-        // Visible y en la zona superior de la cabecera (y < 850)
-        return r.width > 0 && r.height > 0 && r.top < 850 && r.top >= 0;
+        // Visible y en la zona superior/media de la cabecera (y < 1300)
+        return r.width > 0 && r.height > 0 && r.top < 1300 && r.top >= 0;
       });
 
       // A) Búsqueda directa del botón Conectar en la cabecera del prospecto
@@ -402,18 +429,23 @@ async function handleLinkedInSendInvite(win, params) {
       const moreBtn = heroButtons.find(isMoreBtn);
       if (moreBtn) {
         simulateClick(moreBtn);
-        await sleepMs(700);
-
-        // Buscar Conectar dentro del menú desplegable recién abierto
-        const dropdownMenu = document.querySelector('div.artdeco-dropdown__content--is-open, div[role="menu"], div.artdeco-dropdown__content');
-        if (dropdownMenu) {
-          const menuItems = Array.from(dropdownMenu.querySelectorAll('[role="menuitem"], [role="button"], span, div.artdeco-dropdown__item, button'));
-          const menuConnect = menuItems.find(isConnectBtn);
-
-          if (menuConnect) {
-            simulateClick(menuConnect);
-            return { found: true, method: 'more_menu' };
+        
+        // Polling activo esperando que el dropdown menu se monte y renderice
+        let menuConnect = null;
+        for (let p = 0; p < 8; p++) {
+          await sleepMs(300);
+          const dropdownMenu = document.querySelector('div.artdeco-dropdown__content--is-open, div[role="menu"], div.artdeco-dropdown__content, .pvs-overflow-actions-dropdown__content');
+          if (dropdownMenu) {
+            const menuItems = Array.from(dropdownMenu.querySelectorAll('[role="menuitem"], [role="button"], span, div.artdeco-dropdown__item, button, li, div'));
+            menuConnect = menuItems.find(isConnectBtn);
+            if (menuConnect) break;
           }
+        }
+
+        if (menuConnect) {
+          const clickTarget = menuConnect.closest('[role="button"], div.artdeco-dropdown__item, li, button') || menuConnect;
+          simulateClick(clickTarget);
+          return { found: true, method: 'more_menu' };
         }
       }
 
@@ -612,7 +644,7 @@ async function handleLinkedInSendInvite(win, params) {
           for (const el of allButtons) {
             if (el.closest('aside, .scaffold-layout__aside, [data-view-name="profile-component-entity"], header, nav, #global-nav, footer, .msg-overlay-container, #msg-overlay')) continue;
             const r = el.getBoundingClientRect();
-            if (r.top >= 850 || r.top < 0 || r.width === 0) continue;
+            if (r.top >= 1300 || r.top < 0 || r.width === 0) continue;
             const txt = (el.innerText || el.textContent || '').trim().toLowerCase();
             const aria = (el.getAttribute('aria-label') || '').toLowerCase();
             if (txt === 'pendiente' || txt === 'pending' || aria.includes('pendiente') || aria.includes('pending') || txt.includes('retirar') || aria.includes('retirar')) {

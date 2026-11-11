@@ -298,19 +298,12 @@ async function handleLinkedInSendInvite(win, params) {
   // 1. Verificar si la cabecera del lead principal ya está en estado "Pendiente" previamente
   const preCheck = await win.webContents.executeJavaScript(`
     (() => {
-      const mainEl = document.querySelector('main, .scaffold-layout__main') || document;
-      const sections = Array.from(mainEl.querySelectorAll('section'));
-      const topCard = sections.find(s => {
-        if (s.closest('aside, .scaffold-layout__aside')) return false;
-        return Boolean(s.querySelector('h1, .pv-top-card__photo, div.ph5'));
-      }) || sections[0];
-
-      if (!topCard) return { already_pending: false };
-
-      const allButtons = Array.from(topCard.querySelectorAll('button, span.artdeco-button__text'));
+      const allButtons = Array.from(document.querySelectorAll('button, span.artdeco-button__text'));
       for (const b of allButtons) {
-        if (b.closest('aside, .scaffold-layout__aside, [data-view-name="profile-component-entity"]')) continue;
-        const txt = (b.innerText || '').trim().toLowerCase();
+        if (b.closest('aside, .scaffold-layout__aside, [data-view-name="profile-component-entity"], header, nav, #global-nav, footer, .msg-overlay-container, #msg-overlay')) continue;
+        const r = b.getBoundingClientRect();
+        if (r.top >= 850 || r.top < 0 || r.width === 0) continue;
+        const txt = (b.innerText || b.textContent || '').trim().toLowerCase();
         if (txt === 'pendiente' || txt === 'pending') {
           return { already_pending: true };
         }
@@ -343,75 +336,63 @@ async function handleLinkedInSendInvite(win, params) {
         const randY = r.top + (r.height * (0.3 + Math.random() * 0.4));
         el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: randX, clientY: randY }));
         el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: randX, clientY: randY }));
-        el.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: randX, clientY: randY }));
+        el.click();
       };
 
-      // LOCALIZAR EXCLUSIVAMENTE LA CABECERA PRINCIPAL DEL PERFIL (<main>)
-      const mainEl = document.querySelector('main, .scaffold-layout__main');
-      if (!mainEl) {
-        return { found: false, reason: 'Contenedor principal <main> no encontrado en la página de LinkedIn.' };
-      }
+      const isConnectBtn = (btn) => {
+        const txt = (btn.innerText || btn.textContent || '').trim().toLowerCase();
+        const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+        const combined = txt + ' ' + aria;
 
-      // La sección superior del perfil es la primera sección con información del usuario
-      const sections = Array.from(mainEl.querySelectorAll('section'));
-      const topCard = sections.find(s => {
-        if (s.closest('aside, .scaffold-layout__aside')) return false;
-        return Boolean(s.querySelector('h1, .pv-top-card__photo, div.ph5'));
-      }) || sections[0];
+        const hasConnect = combined.includes('conectar') || combined.includes('connect') || aria.includes('invitar');
+        const isExcluded = combined.includes('en común') || combined.includes('contactos en común') || combined.includes('mensaje') || combined.includes('message') || combined.includes('retirar');
+        return hasConnect && !isExcluded;
+      };
 
-      if (!topCard) {
-        return { found: false, reason: 'Cabecera (top card) del perfil no encontrada.' };
-      }
+      const isMoreBtn = (btn) => {
+        const txt = (btn.innerText || btn.textContent || '').trim().toLowerCase();
+        const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+        return (
+          txt === 'más' || txt === 'more' || txt === '...' ||
+          aria.includes('más') || aria.includes('more') || aria.includes('acciones') ||
+          Boolean(btn.querySelector('svg[data-test-icon="overflow-web-ios-medium"], svg[data-test-icon="overflow-web-horizontal-small"], svg use[href*="overflow"]'))
+        );
+      };
 
-      // Contenedor específico de botones de acción de la cabecera
-      const actionContainer = topCard.querySelector('.pvs-profile-actions, .pv-top-card-v2-ctas, .pv-top-card__actions, div.ph5.pb5') || topCard;
+      // 1. Obtener todos los botones candidatos del perfil
+      const allButtons = Array.from(document.querySelectorAll('button, a[role="button"]'));
 
-      // Filtrar terminantemente cualquier botón que pertenezca al sidebar (aside), sugeridos o módulos externos
-      const profileButtons = Array.from(actionContainer.querySelectorAll('button')).filter(b => {
+      // 2. Filtrar terminantemente los botones que pertenecen al sidebar (aside), sugeridos, header/nav y chat
+      const heroButtons = allButtons.filter(b => {
         if (b.closest('aside, .scaffold-layout__aside, [data-view-name="profile-component-entity"], .pv-profile-body-item')) {
           return false;
         }
-        return true;
-      });
-
-      // A) Búsqueda directa del botón Conectar EN LA CABECERA DEL LEAD
-      let connectBtn = profileButtons.find(b => {
-        const txt = (b.innerText || '').trim().toLowerCase();
-        const aria = (b.getAttribute('aria-label') || '').toLowerCase();
-        return (txt === 'conectar' || txt === 'connect' || aria.startsWith('invitar a ') || aria.startsWith('conectar con '));
-      });
-
-      if (connectBtn) {
-        const r = connectBtn.getBoundingClientRect();
-        if (r.width > 0 && r.height > 0) {
-          simulateClick(connectBtn);
-          return { found: true, method: 'direct_header' };
+        if (b.closest('header, nav, #global-nav, footer, .msg-overlay-container, #msg-overlay')) {
+          return false;
         }
+        const r = b.getBoundingClientRect();
+        // Visible y en la zona superior de la cabecera (y < 850)
+        return r.width > 0 && r.height > 0 && r.top < 850 && r.top >= 0;
+      });
+
+      // A) Búsqueda directa del botón Conectar en la cabecera del prospecto
+      const connectBtn = heroButtons.find(isConnectBtn);
+      if (connectBtn) {
+        simulateClick(connectBtn);
+        return { found: true, method: 'direct_header' };
       }
 
-      // B) Si no está directo en la cabecera, buscar el botón "Más" / "More" / "..." DENTRO DE LA CABECERA
-      const moreBtn = profileButtons.find(b => {
-        const txt = (b.innerText || '').trim().toLowerCase();
-        const aria = (b.getAttribute('aria-label') || '').toLowerCase();
-        return (
-          txt === 'más' || txt === 'more' || 
-          aria.includes('más acciones') || aria.includes('more actions') ||
-          b.querySelector('svg[data-test-icon="overflow-web-ios-medium"], svg[data-test-icon="overflow-web-horizontal-small"]')
-        );
-      });
-
+      // B) Si no está visible directo, buscar el botón "Más" / "..." en la cabecera
+      const moreBtn = heroButtons.find(isMoreBtn);
       if (moreBtn) {
         simulateClick(moreBtn);
         await sleepMs(700);
 
-        // Buscar Conectar dentro del menú desplegable abierto adjunto a la acción
-        const dropdownMenu = document.querySelector('div.artdeco-dropdown__content--is-open, div[role="menu"][data-view-name*="overflow"], div.artdeco-dropdown__content');
+        // Buscar Conectar dentro del menú desplegable recién abierto
+        const dropdownMenu = document.querySelector('div.artdeco-dropdown__content--is-open, div[role="menu"], div.artdeco-dropdown__content');
         if (dropdownMenu) {
-          const menuItems = Array.from(dropdownMenu.querySelectorAll('[role="menuitem"], [role="button"], span, div.artdeco-dropdown__item'));
-          const menuConnect = menuItems.find(el => {
-            const txt = (el.innerText || '').trim().toLowerCase();
-            return txt === 'conectar' || txt === 'connect' || txt.includes('conectar');
-          });
+          const menuItems = Array.from(dropdownMenu.querySelectorAll('[role="menuitem"], [role="button"], span, div.artdeco-dropdown__item, button'));
+          const menuConnect = menuItems.find(isConnectBtn);
 
           if (menuConnect) {
             simulateClick(menuConnect);
@@ -532,24 +513,17 @@ async function handleLinkedInSendInvite(win, params) {
   // 5. Validación definitiva: Verificar que el botón de la cabecera del lead pasó a "Pendiente"
   const verifyRes = await win.webContents.executeJavaScript(`
     (() => {
-      const mainEl = document.querySelector('main, .scaffold-layout__main') || document;
-      const sections = Array.from(mainEl.querySelectorAll('section'));
-      const topCard = sections.find(s => {
-        if (s.closest('aside, .scaffold-layout__aside')) return false;
-        return Boolean(s.querySelector('h1, .pv-top-card__photo, div.ph5'));
-      }) || sections[0];
-
+      const allButtons = Array.from(document.querySelectorAll('button, span.artdeco-button__text'));
       let isPending = false;
       let modalStillOpen = false;
 
-      if (topCard) {
-        const allCardButtons = Array.from(topCard.querySelectorAll('button, span.artdeco-button__text'));
-        for (const el of allCardButtons) {
-          if (el.closest('aside, .scaffold-layout__aside, [data-view-name="profile-component-entity"]')) continue;
-          const txt = (el.innerText || '').trim().toLowerCase();
-          if (txt === 'pendiente' || txt === 'pending') {
-            isPending = true;
-          }
+      for (const el of allButtons) {
+        if (el.closest('aside, .scaffold-layout__aside, [data-view-name="profile-component-entity"], header, nav, #global-nav, footer, .msg-overlay-container, #msg-overlay')) continue;
+        const r = el.getBoundingClientRect();
+        if (r.top >= 850 || r.top < 0 || r.width === 0) continue;
+        const txt = (el.innerText || el.textContent || '').trim().toLowerCase();
+        if (txt === 'pendiente' || txt === 'pending') {
+          isPending = true;
         }
       }
 
@@ -603,22 +577,17 @@ async function handleLinkedInSendMessage(win, params) {
   const escapedMsg = JSON.stringify(message);
   const msgResult = await win.webContents.executeJavaScript(`
     (() => {
-      const mainEl = document.querySelector('main, .scaffold-layout__main') || document;
-      const sections = Array.from(mainEl.querySelectorAll('section'));
-      const topCard = sections.find(s => {
-        if (s.closest('aside, .scaffold-layout__aside')) return false;
-        return Boolean(s.querySelector('h1, .pv-top-card__photo, div.ph5'));
-      }) || sections[0];
-
-      if (!topCard) return { ok: false, error: 'Cabecera del perfil no encontrada' };
-
-      const allButtons = Array.from(topCard.querySelectorAll('button')).filter(b => {
-        return !b.closest('aside, .scaffold-layout__aside, [data-view-name="profile-component-entity"]');
+      const allButtons = Array.from(document.querySelectorAll('button, a[role="button"]'));
+      const heroButtons = allButtons.filter(b => {
+        if (b.closest('aside, .scaffold-layout__aside, [data-view-name="profile-component-entity"], .pv-profile-body-item')) return false;
+        if (b.closest('header, nav, #global-nav, footer, .msg-overlay-container, #msg-overlay')) return false;
+        const r = b.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && r.top < 850 && r.top >= 0;
       });
 
-      const msgBtn = allButtons.find(b => {
-        const txt = b.innerText.trim().toLowerCase();
-        return txt === 'enviar mensaje' || txt === 'message';
+      const msgBtn = heroButtons.find(b => {
+        const txt = (b.innerText || b.textContent || '').trim().toLowerCase();
+        return txt.includes('enviar mensaje') || txt.includes('message');
       });
       if (!msgBtn) return { ok: false, error: 'Botón enviar mensaje no encontrado en la cabecera del prospecto' };
       msgBtn.click();

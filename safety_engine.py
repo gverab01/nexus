@@ -902,6 +902,7 @@ def calculate_adaptive_warmup_limit(account_id: str, tenant_id: str, conn=None) 
             score = health["health_score"]
 
         # Límite configurable por el usuario o derivado de curva de calentamiento
+        cfg = get_all_safety_config(conn)
         custom_limit = cfg.get("limite_linkedin_diario") or cfg.get("linkedin_warmup_limite_actual")
         warmup_active = cfg.get("linkedin_warmup_activo", "1") == "1"
 

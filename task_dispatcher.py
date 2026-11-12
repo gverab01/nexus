@@ -592,6 +592,75 @@ def get_next_dispatched_task(tenant_id: Optional[str] = None, sequence_id: Optio
             }
         }
 
+def _ingest_similar_profiles_to_radar(cursor, rep_tenant: str, result_data: Dict[str, Any], lead_row: Any, now_iso: str) -> int:
+    """Ingesta perfiles afines descubiertos por el Radar ('Más perfiles para ti') en la lista de Radar."""
+    similar_profiles = result_data.get("similar_profiles") or []
+    if not similar_profiles or not isinstance(similar_profiles, list):
+        return 0
+    
+    count_ingested = 0
+    try:
+        import extractor_engine, lists_engine
+        radar_list_id = lists_engine.get_or_create_radar_list(tenant_id=rep_tenant)
+        visited_lead_name = lead_row.get("nombre") if isinstance(lead_row, dict) else ""
+        visited_inst = lead_row.get("institucion_actual") if isinstance(lead_row, dict) else ""
+        visited_ubic = lead_row.get("ubicacion") if isinstance(lead_row, dict) else "Chile"
+
+        for sim in similar_profiles:
+            sim_url = sim.get("perfil_url")
+            sim_nom = sim.get("nombre")
+            sim_tit = sim.get("cargo_titular") or ""
+            if not sim_url or not sim_nom:
+                continue
+
+            sim_nom = sim_nom.strip()
+            # Descartar falsos positivos de encabezados o textos residuales
+            if (len(sim_nom) < 3 or 
+                sim_nom.lower().startswith("del sector") or 
+                sim_nom.lower().startswith("del cargo") or 
+                sim_nom.lower().startswith("más perfiles") or
+                sim_nom.lower().startswith("de la instituci") or
+                sim_nom.lower().startswith("personas que")):
+                continue
+
+            clean_sim_url = sim_url.split("?")[0].rstrip("/") + "/"
+            cursor.execute("SELECT id FROM leads WHERE tenant_id = ? AND (perfil_url LIKE ? OR perfil_url = ?)", (rep_tenant, f"{clean_sim_url}%", sim_url))
+            existing_lead = cursor.fetchone()
+            if existing_lead:
+                exist_id = existing_lead["id"] if isinstance(existing_lead, dict) else existing_lead[0]
+                cursor.execute("""
+                    INSERT OR IGNORE INTO leads_en_lista (id, lista_id, lead_id, created_at)
+                    VALUES (?, ?, ?, ?)
+                """, (f"ll-{radar_list_id}-{exist_id}", radar_list_id, exist_id, now_iso))
+                continue
+
+            sim_id = f"lead-radar-{int(time.time())}-{random.randint(1000, 9999)}"
+            sim_cargo, sim_inst = extractor_engine.parse_cargo_and_institucion(sim_tit, default_institucion=visited_inst, location=visited_ubic)
+
+            cursor.execute("""
+                INSERT INTO leads (
+                    id, nombre, cargo_titular, cargo_actual, institucion_actual,
+                    ubicacion, grado_red, perfil_url, estado, tags, notas,
+                    tenant_id, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, '2º', ?, 'EXTRAIDO', ?, ?, ?, ?, ?)
+            """, (
+                sim_id, sim_nom, sim_tit, sim_cargo or "Profesional", sim_inst or visited_inst,
+                visited_ubic or "Chile", sim_url,
+                json.dumps(["RADAR_VISITA"]),
+                f"Descubierto automáticamente por radar de visitas en el perfil de {visited_lead_name}." if visited_lead_name else "Descubierto automáticamente por radar de visitas.",
+                rep_tenant, now_iso, now_iso
+            ))
+
+            cursor.execute("""
+                INSERT OR IGNORE INTO leads_en_lista (id, lista_id, lead_id, created_at)
+                VALUES (?, ?, ?, ?)
+            """, (f"ll-{radar_list_id}-{sim_id}", radar_list_id, sim_id, now_iso))
+            count_ingested += 1
+    except Exception as radar_err:
+        print(f"[Dispatcher Radar Warning] Error procesando perfiles afines: {radar_err}")
+
+    return count_ingested
+
 def process_executed_task_report(
     report_data: Dict[str, Any],
     authenticated_tenant_id: Optional[str] = None,
@@ -912,56 +981,39 @@ def process_executed_task_report(
                     """, update_params)
 
                     # Ingesta al Radar de Prospectos Afines ("Personas que también vieron")
-                    similar_profiles = result_data.get("similar_profiles") or []
-                    if similar_profiles and isinstance(similar_profiles, list):
-                        try:
-                            import extractor_engine, lists_engine
-                            radar_list_id = lists_engine.get_or_create_radar_list(tenant_id=rep_tenant)
-                            visited_lead_name = lead_row.get("nombre") if isinstance(lead_row, dict) else ""
-                            visited_inst = lead_row.get("institucion_actual") if isinstance(lead_row, dict) else ""
-                            visited_ubic = lead_row.get("ubicacion") if isinstance(lead_row, dict) else "Chile"
+                    _ingest_similar_profiles_to_radar(cursor, rep_tenant, result_data, lead_row, now_iso)
 
-                            for sim in similar_profiles:
-                                sim_url = sim.get("perfil_url")
-                                sim_nom = sim.get("nombre")
-                                sim_tit = sim.get("cargo_titular") or ""
-                                if not sim_url or not sim_nom:
-                                    continue
-                                clean_sim_url = sim_url.split("?")[0].rstrip("/") + "/"
-
-                                cursor.execute("SELECT id FROM leads WHERE tenant_id = ? AND (perfil_url LIKE ? OR perfil_url = ?)", (rep_tenant, f"{clean_sim_url}%", sim_url))
-                                if cursor.fetchone():
-                                    continue
-
-                                sim_id = f"lead-radar-{int(time.time())}-{random.randint(1000, 9999)}"
-                                sim_cargo, sim_inst = extractor_engine.parse_cargo_and_institucion(sim_tit, default_institucion=visited_inst, location=visited_ubic)
-
-                                cursor.execute("""
-                                    INSERT INTO leads (
-                                        id, nombre, cargo_titular, cargo_actual, institucion_actual,
-                                        ubicacion, grado_red, perfil_url, estado, tags, notas,
-                                        tenant_id, created_at, updated_at
-                                    ) VALUES (?, ?, ?, ?, ?, ?, '2º', ?, 'EXTRAIDO', ?, ?, ?, ?, ?)
-                                """, (
-                                    sim_id, sim_nom, sim_tit, sim_cargo or "Profesional", sim_inst or visited_inst,
-                                    visited_ubic or "Chile", sim_url,
-                                    json.dumps(["RADAR_VISITA"]),
-                                    f"Descubierto automáticamente por radar de visitas en el perfil de {visited_lead_name}." if visited_lead_name else "Descubierto automáticamente por radar de visitas.",
-                                    rep_tenant, now_iso, now_iso
-                                ))
-
-                                cursor.execute("""
-                                    INSERT OR IGNORE INTO leads_en_lista (id, lista_id, lead_id, created_at)
-                                    VALUES (?, ?, ?, ?)
-                                """, (f"ll-{radar_list_id}-{sim_id}", radar_list_id, sim_id, now_iso))
-                        except Exception as radar_err:
-                            print(f"[Dispatcher Radar Warning] Error procesando perfiles afines: {radar_err}")
                 elif action_type in ("ENVIAR_INVITACION", "LI_SEND_INVITE"):
-                    cursor.execute("""
+                    lead_updates = ["estado = 'INVITACION_ENVIADA'", "fecha_invitacion = ?", "updated_at = ?"]
+                    update_params = [now_iso, now_iso]
+
+                    # Email descubierto en la visita previa
+                    extracted_email = result_data.get("email")
+                    if extracted_email and isinstance(extracted_email, str) and "@" in extracted_email:
+                        lead_updates.append("email = COALESCE(NULLIF(email, ''), ?)")
+                        update_params.append(extracted_email.strip())
+
+                    # Teléfono descubierto en la visita previa
+                    extracted_phone = result_data.get("phone") or result_data.get("telefono")
+                    if extracted_phone and isinstance(extracted_phone, str) and len(extracted_phone.strip()) > 4:
+                        lead_updates.append("telefono = COALESCE(NULLIF(telefono, ''), ?)")
+                        update_params.append(extracted_phone.strip())
+
+                    # Titular / Grado
+                    if result_data.get("cargo_titular"):
+                        lead_updates.append("cargo_titular = COALESCE(NULLIF(cargo_titular, ''), ?)")
+                        update_params.append(result_data["cargo_titular"])
+                    if result_data.get("grado_red"):
+                        lead_updates.append("grado_red = ?")
+                        update_params.append(result_data["grado_red"])
+
+                    update_params.extend([lead_id, rep_tenant])
+                    cursor.execute(f"""
                         UPDATE leads 
-                        SET estado = 'INVITACION_ENVIADA', fecha_invitacion = ?, updated_at = ?
+                        SET {", ".join(lead_updates)}
                         WHERE id = ? AND tenant_id = ?
-                    """, (now_iso, now_iso, lead_id, rep_tenant))
+                    """, update_params)
+
                     try:
                         cursor.execute("""
                             UPDATE linkedin_accounts 
@@ -970,6 +1022,9 @@ def process_executed_task_report(
                         """, (now_iso, rep_tenant))
                     except Exception as li_err:
                         print(f"[Dispatcher Warning] Error actualizando invites_sent_today: {li_err}")
+
+                    # Ingesta al Radar de Prospectos Afines descubiertos durante el envío de invitación
+                    _ingest_similar_profiles_to_radar(cursor, rep_tenant, result_data, lead_row, now_iso)
 
                 # 3. Advance lead to next step
                 next_step_id, next_date_iso, is_sequence_end = sequence_engine._calculate_next_step(

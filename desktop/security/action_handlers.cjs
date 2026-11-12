@@ -270,36 +270,99 @@ async function handleLinkedInVisit(win, params) {
             directPhone = (tel.getAttribute('href') || '').replace(/^tel:/i, '').split('?')[0].trim();
           }
 
-          // 3. Extracción de perfiles afines (Personas que también vieron / Más perfiles para ti)
+          // 3. Extracción de perfiles afines (Personas que también vieron / Más perfiles para ti - Radar)
           const similarProfiles = [];
-          const asideCards = Array.from(document.querySelectorAll('aside section, div[data-view-name="profile-component-entity"], aside ul li, .aside-section-container ul li, [data-member-id]'));
           const seenUrls = new Set();
+          const currentUrlClean = url.split('?')[0].replace(/\/+$/, '');
 
-          for (const card of asideCards) {
-            const link = card.querySelector('a[href*="/in/"]');
-            if (!link) continue;
+          const asideContainer = document.querySelector('aside, .scaffold-layout__aside, [aria-label*="perfiles"], [aria-label*="profiles"]');
+          const candidateLinks = asideContainer 
+            ? Array.from(asideContainer.querySelectorAll('a[href*="/in/"]'))
+            : Array.from(document.querySelectorAll('aside a[href*="/in/"], .scaffold-layout__aside a[href*="/in/"]'));
+
+          for (const link of candidateLinks) {
             let rawHref = (link.getAttribute('href') || '').split('?')[0].trim();
+            if (!rawHref) continue;
             if (!rawHref.startsWith('http')) {
               rawHref = 'https://www.linkedin.com' + (rawHref.startsWith('/') ? '' : '/') + rawHref;
             }
-            if (rawHref.includes('/in/') && !seenUrls.has(rawHref) && !rawHref.includes(url.split('?')[0])) {
-              seenUrls.add(rawHref);
+            const cleanHref = rawHref.replace(/\/+$/, '');
+            if (!cleanHref.includes('/in/') || cleanHref === currentUrlClean || seenUrls.has(cleanHref)) {
+              continue;
+            }
 
-              const spans = Array.from(card.querySelectorAll('span[aria-hidden="true"], p, div.entity-result__primary-subtitle'));
-              const validTexts = spans.map(s => (s.innerText || '').trim()).filter(t => t.length > 1 && !t.includes('1er') && !t.includes('2do') && !t.includes('Conectar') && !t.includes('Seguir'));
+            const card = link.closest('li, div[data-view-name="profile-component-entity"], div.artdeco-entity-lockup, div.base-card') || link.parentElement;
+            if (!card) continue;
 
-              const pName = validTexts[0] || (link.innerText || '').split('\\n')[0].trim();
-              const pHeadline = validTexts[1] || '';
+            // Extraer nombre real del prospecto afin (evitar encabezados como "Del sector de...", "Más perfiles...", etc.)
+            let pName = '';
+            const nameSpans = Array.from(card.querySelectorAll('a[href*="/in/"] span[aria-hidden="true"], h3, div.base-card__title, .entity-result__title-text'));
+            for (const ns of nameSpans) {
+              let t = (ns.innerText || ns.textContent || '').trim();
+              t = t.replace(/[•·\s]+(1er|2do|2º|2°|3er|3º|3°|\d+º|\d+°\+?).*$/i, '').trim();
+              t = t.split('\n')[0].trim();
+                if (t.length > 2 && 
+                    !t.toLowerCase().includes('linkedin') && 
+                    !t.toLowerCase().startsWith('ver perfil') && 
+                    !t.toLowerCase().startsWith('más perfiles') && 
+                    !t.toLowerCase().startsWith('personas que') && 
+                    !t.toLowerCase().startsWith('del sector') && 
+                    !t.toLowerCase().startsWith('del cargo') &&
+                    !t.toLowerCase().startsWith('de la instituci')) {
+                  pName = t;
+                  break;
+                }
+              }
 
-              if (pName && pName.length > 2 && pName !== name && !pName.toLowerCase().includes('linkedin')) {
-                similarProfiles.push({
-                  nombre: pName,
-                  cargo_titular: pHeadline,
-                  perfil_url: rawHref
-                });
+              if (!pName) {
+                let linkText = (link.innerText || link.textContent || '').trim();
+                linkText = linkText.replace(/[•·\s]+(1er|2do|2º|2°|3er|3º|3°|\d+º|\d+°\+?).*$/i, '').trim();
+                linkText = linkText.split('\n')[0].trim();
+                if (linkText.length > 2 && 
+                    !linkText.toLowerCase().includes('linkedin') && 
+                    !linkText.toLowerCase().startsWith('ver perfil') && 
+                    !linkText.toLowerCase().startsWith('más perfiles') && 
+                    !linkText.toLowerCase().startsWith('personas que') && 
+                    !linkText.toLowerCase().startsWith('del sector') && 
+                    !linkText.toLowerCase().startsWith('del cargo') &&
+                    !linkText.toLowerCase().startsWith('de la instituci')) {
+                  pName = linkText;
+                }
+              }
+
+              // Extraer titular profesional
+              let pHeadline = '';
+              const headlineEls = Array.from(card.querySelectorAll('.text-body-small, .entity-result__primary-subtitle, div[class*="subtitle"], p, div.base-card__subtitle, div.t-12'));
+              for (const he of headlineEls) {
+                if (he.closest('button, a[role="button"]')) continue;
+                let ht = (he.innerText || he.textContent || '').trim();
+                if (ht === pName || ht.length < 3) continue;
+                if (/^[•·\s]*(1er|2do|2º|2°|3er|3º|3°|\d+º)[•·\s]*$/i.test(ht)) continue;
+                if (/^(conectar|connect|seguir|follow|mensaje|message|pendiente|pending)/i.test(ht)) continue;
+                if (/^(más perfiles|personas que|del sector|del cargo|de la instituci)/i.test(ht)) continue;
+                pHeadline = ht.split('\n')[0].trim();
+                break;
+              }
+
+            if (!pHeadline) {
+              const allTexts = Array.from(card.querySelectorAll('div, span, p'))
+                .map(el => (el.innerText || '').trim())
+                .filter(t => t.length > 4 && t !== pName && !t.includes(pName) && !/1er|2do|2º|3er|3º|conectar|seguir|mensaje/i.test(t));
+              if (allTexts.length > 0) {
+                pHeadline = allTexts[0].split('\n')[0].trim();
               }
             }
-            if (similarProfiles.length >= 8) break;
+
+            if (pName && pName !== name && pName.length > 2) {
+              seenUrls.add(cleanHref);
+              similarProfiles.push({
+                nombre: pName,
+                cargo_titular: pHeadline,
+                perfil_url: cleanHref
+              });
+            }
+
+            if (similarProfiles.length >= 10) break;
           }
 
           return {
@@ -342,6 +405,7 @@ async function handleLinkedInSendInvite(win, params) {
   if (!visitResult.success) {
     return visitResult;
   }
+  const visitedData = (visitResult && visitResult.result) ? visitResult.result : {};
 
   const note = params.note || params.nota || '';
 
@@ -704,7 +768,12 @@ async function handleLinkedInSendInvite(win, params) {
       method: clickRes.method,
       verified_pending: true,
       has_note: Boolean(note),
-      sent_at: new Date().toISOString()
+      sent_at: new Date().toISOString(),
+      similar_profiles: visitedData.similar_profiles || [],
+      email: visitedData.email || null,
+      phone: visitedData.phone || null,
+      cargo_titular: visitedData.cargo_titular || null,
+      grado_red: visitedData.grado_red || null
     }
   };
 }

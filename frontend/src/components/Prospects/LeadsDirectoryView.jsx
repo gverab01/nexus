@@ -38,16 +38,17 @@ import LeadModal from './LeadModal';
 import NewListModal from '../Lists/NewListModal';
 import UnifiedLeadsTable from './UnifiedLeadsTable';
 import { useSyncQueue } from '../../hooks/useSyncQueue';
+import { showToast } from '../Toast';
 
 const ESTADOS_DISPONIBLES = [
   { id: '', label: 'Todos los estados' },
-  { id: 'EXTRAIDO', label: 'Extraído (Sin acción)' },
-  { id: 'PERFIL_VISITADO', label: 'Perfil Visitado' },
-  { id: 'INVITACION_ENVIADA', label: 'Invitación Enviada' },
-  { id: 'CONECTADO', label: 'Conectado en LinkedIn' },
-  { id: 'MENSAJE_ENVIADO', label: 'Mensaje Enviado' },
+  { id: 'EXTRAIDO', label: 'Por contactar' },
+  { id: 'PERFIL_VISITADO', label: 'Perfil revisado' },
+  { id: 'INVITACION_ENVIADA', label: 'Invitación enviada' },
+  { id: 'CONECTADO', label: 'Conectado' },
+  { id: 'MENSAJE_ENVIADO', label: 'Mensaje enviado' },
   { id: 'RESPONDIÓ', label: 'Respondió' },
-  { id: 'REUNIÓN_AGENDADA', label: 'Reunión Agendada' },
+  { id: 'REUNIÓN_AGENDADA', label: 'Reunión agendada' },
 ];
 
 const PRESETS_FECHA = [
@@ -296,13 +297,13 @@ export default function LeadsDirectoryView({ activeTenantWorkspace = '', onOpenL
     try {
       const res = await syncAcceptedConnections(activeTenantWorkspace);
       if (res && res.ok) {
-        alert(res.mensaje || `Sincronización exitosa: ${res.nuevos_conectados || 0} nuevas conexiones detectadas.`);
+        showToast(res.mensaje || `Sincronización exitosa: ${res.nuevos_conectados || 0} nuevas conexiones detectadas.`, 'success');
         await loadLeads();
       } else {
-        alert(res?.mensaje || 'No se pudo completar la sincronización de conexiones con LinkedIn.');
+        showToast(res?.mensaje || 'No se pudo completar la sincronización de conexiones con LinkedIn.', 'warning');
       }
     } catch (err) {
-      alert(`Error sincronizando conexiones con LinkedIn: ${err.message}`);
+      showToast(`Error sincronizando conexiones con LinkedIn: ${err.message}`, 'error');
     } finally {
       setIsSyncingConnections(false);
     }
@@ -321,8 +322,9 @@ export default function LeadsDirectoryView({ activeTenantWorkspace = '', onOpenL
         next.delete(leadId);
         return next;
       });
+      showToast('Prospecto eliminado.', 'info');
     } catch (err) {
-      alert(`Error eliminando prospecto: ${err.message}`);
+      showToast(`Error eliminando prospecto: ${err.message}`, 'error');
     }
   }
 
@@ -335,8 +337,9 @@ export default function LeadsDirectoryView({ activeTenantWorkspace = '', onOpenL
       await deleteProspectsBatch(Array.from(selectedLeadIds));
       setSelectedLeadIds(new Set());
       await loadLeads();
+      showToast('Prospectos seleccionados eliminados.', 'info');
     } catch (err) {
-      alert(`Error eliminando lote de prospectos: ${err.message}`);
+      showToast(`Error eliminando lote de prospectos: ${err.message}`, 'error');
     } finally {
       setIsBatchDeleting(false);
     }
@@ -371,8 +374,9 @@ export default function LeadsDirectoryView({ activeTenantWorkspace = '', onOpenL
       setTargetListIds(new Set());
       setSelectedLeadIds(new Set());
       await loadLeads();
+      showToast('Prospectos agregados a las listas seleccionadas.', 'success');
     } catch (err) {
-      alert(`Error vinculando prospectos a listas: ${err.message}`);
+      showToast(`Error vinculando prospectos a listas: ${err.message}`, 'error');
     } finally {
       setSavingToLists(false);
     }
@@ -381,7 +385,7 @@ export default function LeadsDirectoryView({ activeTenantWorkspace = '', onOpenL
   // Exportar a CSV
   function handleExportCSV() {
     if (leads.length === 0) {
-      alert('No hay prospectos para exportar con los filtros actuales');
+      showToast('No hay prospectos para exportar con los filtros actuales.', 'warning');
       return;
     }
     const headers = ['Nombre', 'Cargo Actual', 'Empresa / Institución', 'Ubicación', 'Estado', 'Listas', 'Secuencias', 'Fecha Creación', 'Perfil LinkedIn'];

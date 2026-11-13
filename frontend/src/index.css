@@ -20,10 +20,10 @@
   --border-subtle: rgba(255, 255, 255, 0.05);
   --border-focus: #3B82F6;
 
-  /* Escala Tipográfica de Contraste */
+  /* Escala Tipográfica de Contraste (WCAG AA >= 4.5:1 sobre #0E0F12 / #14161A) */
   --text-primary: #F1F3F5;
-  --text-secondary: #9CA3AF;
-  --text-muted: #6B7280;
+  --text-secondary: #B4BAC4;
+  --text-muted: #A1A1AA;
 
   /* Acentos Semánticos */
   --accent-action: #2563EB;
@@ -100,4 +100,59 @@ code, pre, .font-mono {
 .surface-hover:hover {
   background-color: var(--bg-surface-hover);
   border-color: rgba(255, 255, 255, 0.1);
+}
+
+/* ==============================================================================
+   MODO CLARO OPCIONAL ("Daylight / Oficina")
+   ============================================================================== */
+html[data-theme="light"] {
+  color-scheme: light;
+  --bg-canvas: #F5F7FA;
+  --bg-surface: #FFFFFF;
+  --bg-surface-elevated: #F0F3F7;
+  --bg-surface-hover: rgba(15, 23, 42, 0.04);
+  --border-default: #E2E8F0;
+  --border-subtle: rgba(15, 23, 42, 0.08);
+  --text-primary: #0F172A;
+  --text-secondary: #334155;
+  --text-muted: #475569;
+}
+
+html[data-theme="light"] body {
+  background-color: var(--bg-canvas);
+  color: var(--text-primary);
+}
+
+html[data-theme="light"] .bg-\[\#090A0C\],
+html[data-theme="light"] .bg-\[\#0E0F12\],
+html[data-theme="light"] .bg-\[\#0D0E12\] {
+  background-color: #F5F7FA !important;
+}
+
+html[data-theme="light"] .bg-\[\#121316\],
+html[data-theme="light"] .bg-\[\#14161A\] {
+  background-color: #FFFFFF !important;
+}
+
+html[data-theme="light"] .border-\[\#22252B\],
+html[data-theme="light"] .border-white\/\[0\.08\],
+html[data-theme="light"] .border-white\/\[0\.06\] {
+  border-color: #E2E8F0 !important;
+}
+
+html[data-theme="light"] .text-white,
+html[data-theme="light"] .text-zinc-100,
+html[data-theme="light"] .text-zinc-200,
+html[data-theme="light"] .text-\[\#F1F3F5\] {
+  color: #0F172A !important;
+}
+
+html[data-theme="light"] .text-zinc-300,
+html[data-theme="light"] .text-zinc-400 {
+  color: #475569 !important;
+}
+
+html[data-theme="light"] .bg-white\/\[0\.10\],
+html[data-theme="light"] .bg-white\/\[0\.08\] {
+  background-color: #E2E8F0 !important;
 }

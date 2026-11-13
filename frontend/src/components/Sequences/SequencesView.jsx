@@ -62,7 +62,7 @@ import {
 } from '../../services/api';
 import EditStepModal from './EditStepModal';
 import AddStepModal from './AddStepModal';
-import NewSequenceModal from './NewSequenceModal';
+import CampaignWizardModal from './CampaignWizardModal';
 import ConnectListModal from './ConnectListModal';
 import LeadModal from '../Prospects/LeadModal';
 import AutopilotBanner from './AutopilotBanner';
@@ -605,9 +605,9 @@ export default function SequencesView({
       if (!lead.proxima_ejecucion_at) {
         return {
           type: 'ready',
-          label: '⚡ LISTO PARA ENVÍO',
+          label: 'Listo para enviar',
           badgeClass: 'bg-emerald-950/60 text-emerald-300 border-emerald-500/40',
-          subtext: 'Aguardando cupo antiban'
+          subtext: 'Esperando turno de envío'
         };
       }
       const proxDate = new Date(lead.proxima_ejecucion_at);
@@ -616,9 +616,9 @@ export default function SequencesView({
       if (diffMs <= 0 || isNaN(diffMs)) {
         return {
           type: 'ready',
-          label: '⚡ LISTO PARA ENVÍO',
+          label: 'Listo para enviar',
           badgeClass: 'bg-emerald-950/60 text-emerald-300 border-emerald-500/40',
-          subtext: 'Aguardando cupo antiban'
+          subtext: 'Esperando turno de envío'
         };
       }
       const diffMins = Math.round(diffMs / 60000);
@@ -630,9 +630,9 @@ export default function SequencesView({
       }
       return {
         type: 'waiting',
-        label: `⏱️ ENFRIAMIENTO (${timeStr})`,
+        label: `En espera (${timeStr})`,
         badgeClass: 'bg-amber-950/60 text-amber-300 border-amber-500/40',
-        subtext: 'Pausa antiban activa'
+        subtext: 'Pausa de seguridad activa'
       };
     };
 
@@ -1758,9 +1758,10 @@ export default function SequencesView({
         </div>
       )}
 
-      {/* Modal para Crear Nueva Secuencia */}
+      {/* Wizard Guiado para Crear Nueva Campaña */}
       {showNewSequenceModal && (
-        <NewSequenceModal
+        <CampaignWizardModal
+          isOpen={showNewSequenceModal}
           onClose={() => setShowNewSequenceModal(false)}
           onCreated={handleSequenceCreated}
           activeTenantWorkspace={activeTenantWorkspace}

@@ -33,6 +33,7 @@ import {
 import NewManualLeadModal from './NewManualLeadModal';
 import ImportFileModal from './ImportFileModal';
 import ConfirmMatchModal from './ConfirmMatchModal';
+import { showToast } from '../Toast';
 
 export default function MatchingView({ activeTenantWorkspace = '' }) {
   const [leads, setLeads] = useState([]);
@@ -81,11 +82,11 @@ export default function MatchingView({ activeTenantWorkspace = '' }) {
       setSearchingIds(prev => new Set(prev).add(leadId));
       const res = await searchCandidateForStagingLead(leadId);
       if (res && res.estado === 'SIN_RESULTADOS') {
-        alert(res.mensaje || 'No se localizaron perfiles de LinkedIn para este prospecto.');
+        showToast(res.mensaje || 'No se localizaron perfiles de LinkedIn para este prospecto.', 'warning');
       }
       await loadData();
     } catch (err) {
-      alert(`Error en búsqueda: ${err.message}`);
+      showToast(`Error en búsqueda: ${err.message}`, 'error');
     } finally {
       setSearchingIds(prev => {
         const next = new Set(prev);
@@ -115,17 +116,17 @@ export default function MatchingView({ activeTenantWorkspace = '' }) {
       await discardStagingLead(leadId);
       await loadData();
     } catch (err) {
-      alert(`Error al descartar: ${err.message}`);
+      showToast(`Error al descartar: ${err.message}`, 'error');
     }
   }
 
   async function handleDelete(leadId) {
-    if (!confirm('¿Eliminar definitivamente este prospecto del buzón?')) return;
+    if (!confirm('¿Eliminar definitivamente este prospecto de la lista de validación?')) return;
     try {
       await deleteStagingLead(leadId);
       await loadData();
     } catch (err) {
-      alert(`Error eliminando: ${err.message}`);
+      showToast(`Error eliminando: ${err.message}`, 'error');
     }
   }
 
@@ -134,10 +135,13 @@ export default function MatchingView({ activeTenantWorkspace = '' }) {
     try {
       setImportingZoho(true);
       const res = await importZohoStagingLeads({ tenant_id: activeTenantWorkspace, max_registros: 50 });
-      alert(`Sincronización con Zoho completada:\n• ${res.importados || 0} nuevos contactos agregados al buzón\n• ${res.ignorados || 0} ya existían o sin datos suficientes.`);
+      showToast(
+        `Sincronización con Zoho completada: ${res.importados || 0} nuevos contactos agregados (${res.ignorados || 0} ya existían o sin datos suficientes).`,
+        'success'
+      );
       await loadData();
     } catch (err) {
-      alert(`Error importando desde Zoho: ${err.message}`);
+      showToast(`Error importando desde Zoho: ${err.message}`, 'error');
     } finally {
       setImportingZoho(false);
     }
@@ -157,12 +161,12 @@ export default function MatchingView({ activeTenantWorkspace = '' }) {
       {/* 1. Header Principal y Acciones de Entrada */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/[0.06] pb-4">
         <div>
-          <h1 className="text-base font-semibold text-zinc-100 flex items-center gap-2">
+          <h1 className="text-lg font-semibold text-zinc-100 flex items-center gap-2">
             <UserCheck className="w-4 h-4 text-emerald-400" />
-            <span>Descubrimiento & Matching en LinkedIn</span>
+            <span>1. Captar: Validar contactos</span>
           </h1>
-          <p className="text-xs text-zinc-400 mt-0.5">
-            Ingresa nombres y colegios (Manual, CSV o Zoho) para descubrir perfiles en LinkedIn y validarlos con certeza humana.
+          <p className="text-xs text-zinc-300 mt-0.5">
+            Confirma los perfiles de LinkedIn encontrados desde tus archivos, Zoho CRM o ingreso manual antes de guardarlos en tus listas.
           </p>
         </div>
 

@@ -25,6 +25,7 @@ import {
   Info
 } from 'lucide-react';
 import { fetchDashboardMetrics, syncAcceptedConnections } from '../../services/api';
+import { showToast } from '../Toast';
 
 export default function DashboardView({ activeTenantWorkspace = '', onNavigateToTab = null }) {
   const [loading, setLoading] = useState(true);
@@ -59,10 +60,10 @@ export default function DashboardView({ activeTenantWorkspace = '', onNavigateTo
     try {
       setSyncingConnections(true);
       const res = await syncAcceptedConnections(activeTenantWorkspace);
-      alert(res.mensaje || `Revisión completada: ${res.nuevos_conectados || 0} nuevas conexiones.`);
+      showToast(res.mensaje || `Revisión completada: ${res.nuevos_conectados || 0} nuevas conexiones.`, 'success');
       await loadData();
     } catch (err) {
-      alert(`Error revisando conexiones: ${err.message}`);
+      showToast(`Error revisando conexiones: ${err.message}`, 'error');
     } finally {
       setSyncingConnections(false);
     }
@@ -84,16 +85,11 @@ export default function DashboardView({ activeTenantWorkspace = '', onNavigateTo
             <BarChart3 className="w-5 h-5" />
           </div>
           <div>
-            <div className="flex items-center gap-2.5">
-              <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-zinc-100">
-                Dashboard de Rendimiento & KPIs
-              </h1>
-              <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-semibold bg-sky-950/80 text-sky-300 border border-sky-500/30">
-                NexusReach Analytics
-              </span>
-            </div>
-            <p className="text-xs text-zinc-400 mt-0.5">
-              Analítica de prospección multicanal, embudo de conversión y monitoreo de blindaje antiban
+            <h1 className="text-lg sm:text-xl font-semibold tracking-tight text-zinc-100">
+              4. Resultados: Métricas y KPIs
+            </h1>
+            <p className="text-xs text-zinc-300 mt-0.5">
+              Resumen de prospectos contactados, embudo de respuestas y protección de tu cuenta
             </p>
           </div>
         </div>

@@ -36,6 +36,7 @@ import {
 } from '../../services/api';
 import LeadModal from './LeadModal';
 import NewListModal from '../Lists/NewListModal';
+import { showToast } from '../Toast';
 
 const RECENT_SEARCHES_KEY = 'nexusreach_recent_searches';
 const DEFAULT_SEARCHES = [
@@ -85,7 +86,7 @@ function getWindowedPages(current, total) {
   return [1, '...', current - 1, current, current + 1, '...', total];
 }
 
-export default function ProspectsView({ onExtractionStarted, activeTenantWorkspace = '' }) {
+export default function ProspectsView({ onExtractionStarted, activeTenantWorkspace = '', onNavigateToTab = null }) {
   // Parámetros de búsqueda
   const [searchTerm, setSearchTerm] = useState('CEO Founder Chile');
   const [selectedPage, setSelectedPage] = useState(1);
@@ -150,7 +151,7 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
         } : l));
       }
     } catch (err) {
-      alert(`Error sincronizando lead: ${err.message}`);
+      showToast(`Error sincronizando lead: ${err.message}`, 'error');
     } finally {
       setSyncingLeadIds(prev => {
         const next = new Set(prev);
@@ -163,7 +164,7 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
   async function executeSearch(termToSearch, pageToSearch = 1) {
     const term = termToSearch || searchTerm;
     if (!term.trim()) {
-      alert('Ingresa un término o cargo para buscar en LinkedIn');
+      showToast('Ingresa un término o cargo para buscar en LinkedIn.', 'warning');
       return;
     }
 
@@ -174,12 +175,12 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
       const res = await triggerExtraction(term, pageToSearch, null, false, activeTenantWorkspace);
 
       if (res.status === 'error') {
-        alert(`Error en búsqueda: ${res.mensaje || 'Error desconocido'}`);
+        showToast(`Error en búsqueda: ${res.mensaje || 'Error desconocido'}`, 'error');
         return;
       }
 
       if (res.status === 'warning') {
-        alert(`Aviso: ${res.mensaje}`);
+        showToast(res.mensaje || 'Búsqueda completada con advertencias.', 'warning');
         if (!res.leads || res.leads.length === 0) return;
       }
 
@@ -204,7 +205,7 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
       const updatedSearches = saveSearchTermToStorage(term);
       if (updatedSearches) setRecentSearches(updatedSearches);
     } catch (err) {
-      alert(`Error buscando prospectos en LinkedIn: ${err.message}`);
+      showToast(`Error buscando prospectos en LinkedIn: ${err.message}`, 'error');
     } finally {
       setExtracting(false);
     }
@@ -220,12 +221,12 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
       const res = await extractNetworkLeads(src, limit, activeTenantWorkspace);
 
       if (res.status === 'error') {
-        alert(`Error en extracción de red: ${res.mensaje || 'Error desconocido'}`);
+        showToast(`Error extrayendo contactos: ${res.mensaje || 'Error desconocido'}`, 'error');
         return;
       }
 
       if (res.status === 'warning') {
-        alert(`Aviso: ${res.mensaje}`);
+        showToast(res.mensaje || 'Extracción completada con advertencias.', 'warning');
         if (!res.leads || res.leads.length === 0) return;
       }
 
@@ -247,7 +248,7 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
       }
       setSelectedDiscoveredUrls(initialSelected);
     } catch (err) {
-      alert(`Error extrayendo contactos de LinkedIn: ${err.message}`);
+      showToast(`Error extrayendo contactos de LinkedIn: ${err.message}`, 'error');
     } finally {
       setExtractingNetwork(false);
     }
@@ -285,7 +286,7 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
   function handleOpenSaveModal() {
     const toImport = discoveredLeads.filter(l => selectedDiscoveredUrls.has(l.perfil_url));
     if (toImport.length === 0) {
-      alert('Por favor selecciona al menos un prospecto para guardar en tus listas.');
+      showToast('Selecciona al menos un prospecto para guardar en tus listas.', 'warning');
       return;
     }
     setShowSaveToListsModal(true);
@@ -308,7 +309,7 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
     if (toImport.length === 0) return;
 
     if (selectedTargetListIds.size === 0) {
-      alert('Selecciona al menos una lista de destino.');
+      showToast('Selecciona al menos una lista de destino.', 'warning');
       return;
     }
 
@@ -328,17 +329,20 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
         return next;
       });
 
-      alert(
-        `¡Prospectos guardados con éxito!\n` +
-        `• ${totalAfectados} prospectos asignados a ${listIdsArray.length} lista(s) de destino.\n` +
-        `• ${agregados} nuevos incorporados a la base (${omitidos} preexistentes vinculados).`
+      showToast(
+        `${totalAfectados} prospectos guardados en ${listIdsArray.length} lista(s) (${agregados} nuevos, ${omitidos} ya existentes).`,
+        'success',
+        onNavigateToTab
+          ? { label: 'Ir a campañas', onClick: () => onNavigateToTab('secuencias') }
+          : null,
+        7000
       );
 
       setShowSaveToListsModal(false);
       setSelectedDiscoveredUrls(new Set());
       await loadLists();
     } catch (err) {
-      alert(`Error guardando prospectos: ${err.message}`);
+      showToast(`Error guardando prospectos: ${err.message}`, 'error');
     } finally {
       setImportingSelected(false);
     }
@@ -385,14 +389,11 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
       {/* 1. Header de Sección */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h2 className="text-base font-semibold text-zinc-100 tracking-tight flex items-center gap-2">
-            <span>Búsqueda de Prospectos B2B</span>
-            <span className="text-[10px] px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono font-normal border border-white/[0.06]">
-              LinkedIn Live Discovery
-            </span>
+          <h2 className="text-lg font-semibold text-zinc-100 tracking-tight">
+            1. Captar: Buscar prospectos
           </h2>
-          <p className="text-xs text-zinc-400 mt-0.5">
-            Explora decisores directamente en LinkedIn, navega resultados por páginas y guárdalos en una o varias listas a la vez.
+          <p className="text-xs text-zinc-300 mt-0.5">
+            Encuentra decisores en LinkedIn por cargo o empresa y guárdalos en tus listas para contactarlos.
           </p>
         </div>
       </div>
@@ -405,17 +406,17 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
               <Search className="w-3.5 h-3.5 text-zinc-300" />
             </div>
             <div>
-              <h3 className="text-xs font-medium text-zinc-100">Buscador en Tiempo Real de LinkedIn</h3>
-              <p className="text-[11px] text-zinc-400">
-                Consulta perfiles calificados por cargos, sectores o empresas objetivo
+              <h3 className="text-xs font-medium text-zinc-100">Buscador de LinkedIn</h3>
+              <p className="text-xs text-zinc-400">
+                Consulta perfiles por cargos, sectores o empresas objetivo
               </p>
             </div>
           </div>
 
           {/* Búsquedas recientes */}
           <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-[11px] text-zinc-500 mr-1 flex items-center gap-1">
-              <History className="w-3 h-3 text-zinc-500" />
+            <span className="text-xs text-zinc-400 mr-1 flex items-center gap-1">
+              <History className="w-3.5 h-3.5 text-zinc-400" />
               Recientes:
             </span>
             {recentSearches.map((term) => (
@@ -427,7 +428,7 @@ export default function ProspectsView({ onExtractionStarted, activeTenantWorkspa
                   setSelectedPage(1);
                   executeSearch(term, 1);
                 }}
-                className="px-2 py-0.5 rounded-md text-[11px] bg-[#0D0E12] hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 border border-white/[0.06] transition cursor-pointer"
+                className="px-2.5 py-1 rounded-md text-xs bg-[#0D0E12] hover:bg-zinc-800 text-zinc-300 hover:text-white border border-white/[0.08] transition cursor-pointer"
                 title={`Buscar "${term}"`}
               >
                 {term}

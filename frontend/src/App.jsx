@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import TopBar from './components/TopBar';
 import SafetyBanner from './components/SafetyBanner';
+import ToastContainer, { showToast } from './components/Toast';
 import ProspectsView from './components/Prospects/ProspectsView';
 import ListsView from './components/Lists/ListsView';
 import SequencesView from './components/Sequences/SequencesView';
@@ -17,6 +18,10 @@ import AntibanSettingsModal from './components/AntibanSettingsModal';
 import AntibanSettingsView from './components/Antiban/AntibanSettingsView';
 import DashboardView from './components/Dashboard/DashboardView';
 import MatchingView from './components/Matching/MatchingView';
+import InicioView from './components/Home/InicioView';
+import AudienceView from './components/Audience/AudienceView';
+import SettingsView from './components/Settings/SettingsView';
+import CampaignWizardModal from './components/Sequences/CampaignWizardModal';
 import { 
   fetchLeadLists, 
   fetchSequences, 
@@ -38,7 +43,7 @@ import {
 function getDefaultTabForUser(user) {
   if (user?.rol === 'SUPER_ADMIN') return 'super_admin';
   if (user?.rol === 'AGENCY_ADMIN') return 'agency_portal';
-  return 'prospectos';
+  return 'inicio';
 }
 
 export default function App() {
@@ -54,7 +59,10 @@ export default function App() {
     limite_email_workspace_diario: 15,
   });
 
-  const [activeTab, setActiveTab] = useState('prospectos');
+  const [activeTab, setActiveTab] = useState('inicio');
+  const [audienceSubTab, setAudienceSubTab] = useState('buscar');
+  const [settingsSubTab, setSettingsSubTab] = useState('canales');
+  const [isCampaignWizardOpen, setIsCampaignWizardOpen] = useState(false);
   const [totalLeadsCount, setTotalLeadsCount] = useState(0);
   const [listsCount, setListsCount] = useState(0);
   const [sequencesCount, setSequencesCount] = useState(0);
@@ -73,8 +81,40 @@ export default function App() {
   const [selectedSequenceId, setSelectedSequenceId] = useState(null);
 
   function handleTabChange(nextTab) {
-    if (nextTab === 'secuencias') {
+    if (nextTab === 'secuencias' || nextTab === 'campanas') {
       setSelectedSequenceId(null);
+      setActiveTab('campanas');
+      return;
+    }
+    if (nextTab === 'prospectos') {
+      setAudienceSubTab('buscar');
+      setActiveTab('audiencia');
+      return;
+    }
+    if (nextTab === 'matching') {
+      setAudienceSubTab('validar');
+      setActiveTab('audiencia');
+      return;
+    }
+    if (nextTab === 'listas') {
+      setAudienceSubTab('listas');
+      setActiveTab('audiencia');
+      return;
+    }
+    if (nextTab === 'leads_directorio') {
+      setAudienceSubTab('todos');
+      setActiveTab('audiencia');
+      return;
+    }
+    if (nextTab === 'antiban') {
+      setSettingsSubTab('proteccion');
+      setActiveTab('ajustes');
+      return;
+    }
+    if (nextTab === 'logs') {
+      setSettingsSubTab('historial');
+      setActiveTab('ajustes');
+      return;
     }
     setActiveTab(nextTab);
   }
@@ -247,7 +287,7 @@ export default function App() {
       await showWorkBrowser(url, 'linkedin');
       setTimeout(checkConnectionAndCampaign, 1500);
     } catch (err) {
-      alert(`Error abriendo LinkedIn: ${err.message}`);
+      showToast(`Error abriendo LinkedIn: ${err.message}`, 'error');
     }
   }
 
@@ -256,7 +296,7 @@ export default function App() {
       await showWorkBrowser('https://web.whatsapp.com', 'whatsapp');
       setTimeout(checkConnectionAndCampaign, 1500);
     } catch (err) {
-      alert(`Error abriendo WhatsApp Web: ${err.message}`);
+      showToast(`Error abriendo WhatsApp Web: ${err.message}`, 'error');
     }
   }
 
@@ -277,7 +317,7 @@ export default function App() {
       }
       setTimeout(checkConnectionAndCampaign, 1500);
     } catch (err) {
-      alert(`Error abriendo Zoho CRM: ${err.message}`);
+      showToast(`Error abriendo Zoho CRM: ${err.message}`, 'error');
     }
   }
 
@@ -286,7 +326,7 @@ export default function App() {
       await loginZoho();
       setTimeout(checkConnectionAndCampaign, 1500);
     } catch (err) {
-      alert(`Error conectando con Zoho Accounts: ${err.message}`);
+      showToast(`Error conectando con Zoho Accounts: ${err.message}`, 'error');
     }
   }
 
@@ -296,7 +336,7 @@ export default function App() {
       await logoutZoho();
       setTimeout(checkConnectionAndCampaign, 2000);
     } catch (err) {
-      alert(`Error cerrando sesión en Zoho: ${err.message}`);
+      showToast(`Error cerrando sesión en Zoho: ${err.message}`, 'error');
     }
   }
 
@@ -305,7 +345,7 @@ export default function App() {
       await showWorkBrowser(null, 'linkedin');
       setTimeout(checkConnectionAndCampaign, 1500);
     } catch (err) {
-      alert(`Error con el navegador de trabajo: ${err.message}`);
+      showToast(`Error con el navegador de trabajo: ${err.message}`, 'error');
     }
   }
 
@@ -313,9 +353,14 @@ export default function App() {
     try {
       const nextState = !campaignActive;
       const res = await toggleCampaign(nextState);
-      setCampaignActive(Boolean(res.activa));
+      const isNowActive = Boolean(res.activa);
+      setCampaignActive(isNowActive);
+      showToast(
+        isNowActive ? 'Campañas reanudadas. Los envíos programados continuarán automáticamente.' : 'Campañas en pausa. No se enviarán nuevos mensajes hasta que las reanudes.',
+        isNowActive ? 'success' : 'warning'
+      );
     } catch (err) {
-      alert(`Error cambiando estado de campaña: ${err.message}`);
+      showToast(`Error cambiando estado de campaña: ${err.message}`, 'error');
     }
   }
 
@@ -448,38 +493,39 @@ export default function App() {
             />
           )}
 
-          {activeTab === 'prospectos' && (
-            <ProspectsView 
-              onExtractionStarted={() => setIsExtracting(true)} 
+          {activeTab === 'inicio' && (
+            <InicioView
               activeTenantWorkspace={selectedWorkspaceTenantId}
+              linkedinSessionActive={linkedinSessionActive}
+              campaignActive={campaignActive}
+              sequencesCount={sequencesCount}
+              totalLeadsCount={totalLeadsCount}
+              onToggleCampaign={handleToggleCampaign}
+              onOpenLinkedin={handleOpenLinkedin}
+              onNavigateToTab={handleTabChange}
+              onOpenCampaignWizard={() => setIsCampaignWizardOpen(true)}
+              onOpenFullAnalytics={() => handleTabChange('dashboard')}
             />
           )}
 
-          {activeTab === 'leads_directorio' && (
-            <LeadsDirectoryView 
+          {activeTab === 'audiencia' && (
+            <AudienceView
+              key={audienceSubTab}
               activeTenantWorkspace={selectedWorkspaceTenantId}
-              onOpenLeadSearch={() => handleTabChange('prospectos')}
-            />
-          )}
-
-          {activeTab === 'matching' && (
-            <MatchingView 
-              activeTenantWorkspace={selectedWorkspaceTenantId}
-            />
-          )}
-
-          {activeTab === 'listas' && (
-            <ListsView 
+              initialSubTab={audienceSubTab}
+              matchingCount={matchingCount}
+              totalLeadsCount={totalLeadsCount}
+              listsCount={listsCount}
+              onExtractionStarted={() => setIsExtracting(true)}
               onSelectSequence={(seq) => {
                 setSelectedSequenceId(seq?.id || null);
-                setActiveTab('secuencias');
-              }} 
-              onNavigateToSearch={(searchTerm) => handleTabChange('prospectos')}
-              activeTenantWorkspace={selectedWorkspaceTenantId}
+                setActiveTab('campanas');
+              }}
+              onNavigateToTab={handleTabChange}
             />
           )}
 
-          {activeTab === 'secuencias' && (
+          {activeTab === 'campanas' && (
             <SequencesView 
               activeTenantWorkspace={selectedWorkspaceTenantId}
               initialSequenceId={selectedSequenceId}
@@ -493,17 +539,27 @@ export default function App() {
               activeTenantWorkspace={selectedWorkspaceTenantId}
               onNavigateToTab={(tab, seqId) => {
                 if (seqId) setSelectedSequenceId(seqId);
-                setActiveTab(tab);
+                handleTabChange(tab);
               }}
             />
           )}
 
-          {activeTab === 'antiban' && (
-            <AntibanSettingsView activeTenantWorkspace={selectedWorkspaceTenantId} />
-          )}
-
-          {activeTab === 'logs' && (
-            <ActivityLogsView onStatusChange={handleLogStatusChange} currentUser={currentUser} />
+          {activeTab === 'ajustes' && (
+            <SettingsView
+              key={settingsSubTab}
+              activeTenantWorkspace={selectedWorkspaceTenantId}
+              initialSubTab={settingsSubTab}
+              currentUser={currentUser}
+              linkedinSessionActive={linkedinSessionActive}
+              whatsappSessionActive={whatsappSessionActive}
+              zohoSessionActive={zohoSessionActive}
+              onOpenLinkedin={handleOpenLinkedin}
+              onOpenWhatsApp={handleOpenWhatsApp}
+              onOpenZoho={handleOpenZoho}
+              onLogoutZoho={handleLogoutZoho}
+              onViewBrowser={handleViewBrowser}
+              onLogStatusChange={handleLogStatusChange}
+            />
           )}
         </main>
         </div>
@@ -524,6 +580,21 @@ export default function App() {
         onClose={() => setIsAntibanModalOpen(false)}
         onSaved={checkConnectionAndCampaign}
       />
+
+      {/* Wizard Guiado para Crear Nueva Campaña */}
+      <CampaignWizardModal
+        isOpen={isCampaignWizardOpen}
+        onClose={() => setIsCampaignWizardOpen(false)}
+        activeTenantWorkspace={selectedWorkspaceTenantId}
+        onCreated={async (created) => {
+          await refreshCounters();
+          setSelectedSequenceId(created?.id || null);
+          setActiveTab('campanas');
+        }}
+      />
+
+      {/* Notificaciones no bloqueantes */}
+      <ToastContainer />
     </div>
   );
 }

@@ -48,11 +48,11 @@ export const ALL_COLUMNS = [
   { id: 'acciones', label: 'Acciones', sortable: false, locked: true, align: 'right' },
 ];
 
-// Configuraciones de columnas por defecto para cada contexto
+// Configuraciones de columnas por defecto para cada contexto (máx. 5-6 columnas visibles para evitar scroll horizontal)
 const DEFAULT_COLUMNS_BY_CONTEXT = {
-  directory: ['select', 'prospecto', 'cargo', 'empresa', 'email', 'zoho', 'estado', 'listas', 'fecha', 'acciones'],
-  list: ['select', 'prospecto', 'cargo', 'empresa', 'ubicacion', 'email', 'zoho', 'estado', 'fecha', 'acciones'],
-  sequence: ['select', 'prospecto', 'cargo', 'empresa', 'email', 'zoho', 'paso_cola', 'acciones']
+  directory: ['select', 'prospecto', 'cargo', 'empresa', 'estado', 'acciones'],
+  list: ['select', 'prospecto', 'cargo', 'empresa', 'estado', 'acciones'],
+  sequence: ['select', 'prospecto', 'empresa', 'paso_cola', 'acciones']
 };
 
 export default function UnifiedLeadsTable({

@@ -20,14 +20,31 @@ let zohoConsoleLogs = [];
 let cachedWhatsAppSession = false;
 const INTERNAL_PORT = 9099;
 
-// Desactivar flags de automatización en Chromium y silenciar logs internos de depuración de Chromium (Hit debug scenario: 4 y handshake net_error -101)
+// Rastreo de actividad e hibernación de ventanas ocultas para ahorro de RAM/CPU
+const IDLE_HIBERNATE_MS = 5 * 60 * 1000; // 5 minutos ocultas sin actividad
+const windowLastActivity = {
+  linkedin: Date.now(),
+  whatsapp: Date.now(),
+  zoho: Date.now()
+};
+let statusCache = { data: null, expiresAt: 0 };
+
+function touchWindowActivity(channel) {
+  if (channel && Object.prototype.hasOwnProperty.call(windowLastActivity, channel)) {
+    windowLastActivity[channel] = Date.now();
+  }
+  statusCache.expiresAt = 0;
+}
+
+// Desactivar flags de automatización en Chromium y optimizar consumo de energía/caché sin alterar el fingerprint
 app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
 app.commandLine.appendSwitch('excludeSwitches', 'enable-automation');
 app.commandLine.appendSwitch('log-level', '3'); // Silencia advertencias internas no críticas de Chromium
 app.commandLine.appendSwitch('ignore-certificate-errors'); // Evita errores SSL net_error -101 en sockets/telemetría interna
-app.commandLine.appendSwitch('disable-background-timer-throttling');
-app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
-app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('autoplay-policy', 'document-user-activation-required'); // Impide reproducción automática de video en segundo plano
+app.commandLine.appendSwitch('disk-cache-size', '104857600'); // Tope de 100 MB de caché en disco
+app.commandLine.appendSwitch('disable-component-update');
+app.commandLine.appendSwitch('disable-domain-reliability');
 
 const STEALTH_INJECTION_SCRIPT = `
   (() => {
@@ -305,6 +322,7 @@ function setupSessionGuardsAndListeners() {
  * Crea o retorna la ventana de LinkedIn en Chromium con sesión aislada.
  */
 function getOrCreateLinkedInWindow(shouldShow = false) {
+  touchWindowActivity('linkedin');
   if (linkedInWindow && !linkedInWindow.isDestroyed()) {
     if (shouldShow && !linkedInWindow.isVisible()) {
       linkedInWindow.show();
@@ -331,7 +349,7 @@ function getOrCreateLinkedInWindow(shouldShow = false) {
       nodeIntegration: false,
       sandbox: false,
       webSecurity: false,
-      backgroundThrottling: false
+      backgroundThrottling: true
     }
   });
 
@@ -363,6 +381,7 @@ function getOrCreateLinkedInWindow(shouldShow = false) {
  * Crea o retorna la ventana de WhatsApp Web en Chromium con sesión aislada.
  */
 function getOrCreateWhatsAppWindow(shouldShow = false) {
+  touchWindowActivity('whatsapp');
   if (whatsAppWindow && !whatsAppWindow.isDestroyed()) {
     if (shouldShow && !whatsAppWindow.isVisible()) {
       whatsAppWindow.show();
@@ -389,7 +408,7 @@ function getOrCreateWhatsAppWindow(shouldShow = false) {
       nodeIntegration: false,
       sandbox: false,
       webSecurity: true,
-      backgroundThrottling: false
+      backgroundThrottling: true
     }
   });
 
@@ -427,6 +446,7 @@ function getOrCreateWhatsAppWindow(shouldShow = false) {
  * Crea o retorna la ventana de Zoho CRM en Chromium con sesión aislada y persistente.
  */
 function getOrCreateZohoWindow(shouldShow = false) {
+  touchWindowActivity('zoho');
   if (zohoWindow && !zohoWindow.isDestroyed()) {
     if (shouldShow && !zohoWindow.isVisible()) {
       zohoWindow.show();
@@ -454,7 +474,7 @@ function getOrCreateZohoWindow(shouldShow = false) {
       nodeIntegration: false,
       sandbox: false,
       webSecurity: true,
-      backgroundThrottling: false
+      backgroundThrottling: true
     }
   });
 
@@ -680,11 +700,16 @@ function startInternalServer() {
       const urlPath = req.url.split('?')[0];
 
       try {
-        // 1. Estado del navegador embebido
+        // 1. Estado del navegador embebido (Lazy Loading + Caché de 4s para evitar instanciar renderers ociosos)
         if (urlPath === '/status' && req.method === 'GET') {
-          const liWin = getOrCreateLinkedInWindow(false);
-          const waWin = getOrCreateWhatsAppWindow(false);
-          const zoWin = zohoWindow && !zohoWindow.isDestroyed() ? zohoWindow : null;
+          const now = Date.now();
+          if (statusCache.data && now < statusCache.expiresAt) {
+            return sendJson(200, statusCache.data);
+          }
+
+          const liWin = (linkedInWindow && !linkedInWindow.isDestroyed()) ? linkedInWindow : null;
+          const waWin = (whatsAppWindow && !whatsAppWindow.isDestroyed()) ? whatsAppWindow : null;
+          const zoWin = (zohoWindow && !zohoWindow.isDestroyed()) ? zohoWindow : null;
           const liUrl = liWin ? liWin.webContents.getURL() : '';
           const waUrl = waWin ? waWin.webContents.getURL() : '';
           const zoUrl = zoWin ? zoWin.webContents.getURL() : '';
@@ -694,7 +719,7 @@ function startInternalServer() {
           const zohoCookies = await session.fromPartition(ZOHO_PARTITION_NAME).cookies.get({ domain: '.zoho.com' });
           const hasZoho = zohoCookies.some((c) => c.name === 'crmcsr');
 
-          // Verificación de sesión de WhatsApp Web en el Chromium aislado
+          // Verificación de sesión de WhatsApp Web en el Chromium aislado (sin forzar apertura de ventana)
           let hasWhatsApp = cachedWhatsAppSession;
           if (!hasWhatsApp) {
             try {
@@ -710,12 +735,12 @@ function startInternalServer() {
             } catch (e) {}
           }
 
-          if (!hasWhatsApp && waWin && !waWin.isDestroyed()) {
+          if (!hasWhatsApp && waWin) {
             const isAuth = await checkWhatsAppWebSession(waWin);
             if (isAuth) hasWhatsApp = true;
           }
 
-          return sendJson(200, {
+          const payload = {
             ok: true,
             running: true,
             active: true,
@@ -732,7 +757,9 @@ function startInternalServer() {
             linkedin_visible: Boolean(liWin && liWin.isVisible()),
             whatsapp_visible: Boolean(waWin && waWin.isVisible()),
             zoho_visible: Boolean(zoWin && zoWin.isVisible())
-          });
+          };
+          statusCache = { data: payload, expiresAt: now + 4000 };
+          return sendJson(200, payload);
         }
 
         // 2. Navegar a una URL (validada por Allowlist DomainGuard)
@@ -1130,6 +1157,44 @@ if (!gotSingleInstanceLock) {
     });
 
     startInternalServer();
+
+    // Recolector de ventanas ocultas inactivas (Idle Unload / Hibernación para ahorro de RAM y CPU)
+    setInterval(() => {
+      try {
+        const now = Date.now();
+        const st = workerRunner.getStatus();
+        const isExecuting = st.fase === 'ejecutando';
+        const activeCanal = st.canal;
+
+        if (whatsAppWindow && !whatsAppWindow.isDestroyed() && !whatsAppWindow.isVisible()) {
+          if (!(isExecuting && activeCanal === 'WhatsApp') && (now - windowLastActivity.whatsapp > IDLE_HIBERNATE_MS)) {
+            console.log('[Electron Hibernación] Liberando ventana oculta inactiva de WhatsApp Web (sesión en disco intacta).');
+            whatsAppWindow.destroy();
+            whatsAppWindow = null;
+            statusCache.expiresAt = 0;
+          }
+        }
+
+        if (zohoWindow && !zohoWindow.isDestroyed() && !zohoWindow.isVisible()) {
+          if (!(isExecuting && activeCanal === 'Zoho') && (now - windowLastActivity.zoho > IDLE_HIBERNATE_MS)) {
+            console.log('[Electron Hibernación] Liberando ventana oculta inactiva de Zoho CRM (sesión en disco intacta).');
+            zohoWindow.destroy();
+            zohoWindow = null;
+            statusCache.expiresAt = 0;
+          }
+        }
+
+        if (linkedInWindow && !linkedInWindow.isDestroyed() && !linkedInWindow.isVisible()) {
+          const isIdleWorker = !st.activo || st.fase === 'reposo' || (st.fase === 'espera_cola' && (st.segundos_restantes || 0) > 120);
+          const currentLiUrl = linkedInWindow.webContents.getURL() || '';
+          if (isIdleWorker && currentLiUrl && currentLiUrl !== 'about:blank' && (now - windowLastActivity.linkedin > IDLE_HIBERNATE_MS)) {
+            console.log('[Electron Hibernación] Descargando DOM pesado de LinkedIn en reposo -> about:blank (cookies preservadas).');
+            linkedInWindow.loadURL('about:blank').catch(() => {});
+            statusCache.expiresAt = 0;
+          }
+        }
+      } catch (_) {}
+    }, 60000);
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {

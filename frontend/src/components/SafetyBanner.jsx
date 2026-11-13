@@ -10,8 +10,15 @@ export default function SafetyBanner({ activeTab = '' }) {
 
   useEffect(() => {
     loadSafety();
-    const interval = setInterval(loadSafety, 10000);
-    return () => clearInterval(interval);
+    const interval = setInterval(() => {
+      if (!document.hidden) loadSafety();
+    }, 20000);
+    const onVis = () => { if (!document.hidden) loadSafety(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVis);
+    };
   }, []);
 
   async function loadSafety() {

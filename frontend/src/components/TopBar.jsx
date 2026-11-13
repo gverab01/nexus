@@ -30,16 +30,20 @@ export default function TopBar({
   useEffect(() => {
     let active = true;
     const check = async () => {
+      if (document.hidden) return;
       try {
         const st = await fetchQueueStatus(selectedWorkspaceTenantId);
         if (active) setQueueStatus(st);
       } catch (_) {}
     };
     check();
-    const timer = setInterval(check, 10000);
+    const timer = setInterval(check, 15000);
+    const onVis = () => { if (!document.hidden) check(); };
+    document.addEventListener('visibilitychange', onVis);
     return () => {
       active = false;
       clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVis);
     };
   }, [selectedWorkspaceTenantId]);
 

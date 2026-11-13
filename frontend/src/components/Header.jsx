@@ -30,12 +30,19 @@ export default function Header({
   const [campaignActive, setCampaignActive] = useState(true);
   const [launchingBrowser, setLaunchingBrowser] = useState(false);
 
-  // Consulta inicial y periódica del estado del navegador de trabajo y campaña
+  // Consulta inicial y periódica consciente de visibilidad del estado del navegador de trabajo y campaña
   useEffect(() => {
     checkBrowserConnection();
     checkCampaignStatus();
-    const interval = setInterval(checkBrowserConnection, 8000);
-    return () => clearInterval(interval);
+    const interval = setInterval(() => {
+      if (!document.hidden) checkBrowserConnection();
+    }, 15000);
+    const onVis = () => { if (!document.hidden) checkBrowserConnection(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVis);
+    };
   }, []);
 
   async function checkCampaignStatus() {

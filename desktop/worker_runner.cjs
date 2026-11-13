@@ -7,6 +7,7 @@ const { executeAction } = require('./security/action_handlers.cjs');
 let isLoopRunning = false;
 let loopTimeout = null;
 let currentGetWorkWindow = null;
+let actionsSinceLastRecycle = 0;
 
 let runnerDetails = {
   fase: 'reposo', // 'reposo' | 'autenticacion_requerida' | 'consultando' | 'ejecutando' | 'pausa_humana' | 'espera_cola' | 'error'
@@ -502,18 +503,38 @@ async function runNextCycle(getWorkWindow) {
     if (!response.hay_tarea) {
       const espera = response.esperar_segundos ? response.esperar_segundos : 15;
       const motivo = response.motivo ? response.motivo : 'Sin tareas activas';
-      const targetTime = Date.now() + (espera * 1000);
+      const isDeepSleepMotivo = /horario|kill|pausad|l[ií]mite/i.test(motivo) || espera >= 120;
+      const finalEspera = isDeepSleepMotivo ? Math.max(espera, 180) : espera;
+      const targetTime = Date.now() + (finalEspera * 1000);
 
       runnerDetails.fase = 'espera_cola';
       runnerDetails.accion_actual = motivo;
-      runnerDetails.detalle_accion = `El despachador volverá a evaluar la cola de secuencias al finalizar el contador (${espera}s).`;
+      runnerDetails.detalle_accion = isDeepSleepMotivo
+        ? `Modo reposo profundo antiban activo (${finalEspera}s). Navegador en hibernación para ahorrar recursos.`
+        : `El despachador volverá a evaluar la cola de secuencias al finalizar el contador (${finalEspera}s).`;
       runnerDetails.cuenta_regresiva_hasta = targetTime;
-      runnerDetails.segundos_totales = espera;
+      runnerDetails.segundos_totales = finalEspera;
       runnerDetails.pausa_inicio_ts = Date.now();
       runnerDetails.prospecto_actual = null;
 
+      // Hibernar ventana de LinkedIn oculta durante reposo profundo (ahorro RAM/CPU + patrón humano)
+      if (isDeepSleepMotivo && getWorkWindow) {
+        try {
+          const liWin = getWorkWindow(false, 'linkedin');
+          if (liWin && !liWin.isDestroyed() && !liWin.isVisible()) {
+            const curUrl = liWin.webContents.getURL() || '';
+            if (curUrl && curUrl !== 'about:blank') {
+              liWin.loadURL('about:blank').catch(() => {});
+            }
+            if (typeof liWin.webContents.setBackgroundThrottling === 'function') {
+              liWin.webContents.setBackgroundThrottling(true);
+            }
+          }
+        } catch (_) {}
+      }
+
       if (isLoopRunning) {
-        loopTimeout = setTimeout(() => runNextCycle(getWorkWindow), espera * 1000);
+        loopTimeout = setTimeout(() => runNextCycle(getWorkWindow), finalEspera * 1000);
       }
       return;
     }
@@ -598,16 +619,29 @@ async function runNextCycle(getWorkWindow) {
     // Ejecutar únicamente con los parámetros firmados dentro del comando verificado
     const execParams = comando.params || {};
 
-    const execResult = await executor(
-      actionToRun,
-      execParams,
-      {
-        linkedInWindow: (canal === 'LinkedIn') ? win : (getWorkWindow ? getWorkWindow(false, 'linkedin') : win),
-        whatsAppWindow: (canal === 'WhatsApp') ? win : (getWorkWindow ? getWorkWindow(false, 'whatsapp') : win),
-        zohoWindow: (canal === 'Zoho') ? win : (getWorkWindow ? getWorkWindow(false, 'zoho') : win)
-      },
-      { allowZoho: Boolean(response.zoho_activo) }
-    );
+    // Desactivar throttling solo durante la ejecución activa para precisión biométrica humana
+    if (win && !win.isDestroyed() && win.webContents && typeof win.webContents.setBackgroundThrottling === 'function') {
+      try { win.webContents.setBackgroundThrottling(false); } catch (_) {}
+    }
+
+    let execResult;
+    try {
+      execResult = await executor(
+        actionToRun,
+        execParams,
+        {
+          linkedInWindow: (canal === 'LinkedIn') ? win : null,
+          whatsAppWindow: (canal === 'WhatsApp') ? win : null,
+          zohoWindow: (canal === 'Zoho') ? win : null
+        },
+        { allowZoho: Boolean(response.zoho_activo) }
+      );
+    } finally {
+      // Restaurar throttling en segundo plano apenas finaliza la acción
+      if (win && !win.isDestroyed() && win.webContents && typeof win.webContents.setBackgroundThrottling === 'function') {
+        try { win.webContents.setBackgroundThrottling(true); } catch (_) {}
+      }
+    }
 
     // 4. Firmar y reportar resultado al backend; exigir confirmación antes de dar por completada la tarea localmente
     runnerDetails.detalle_accion = 'Confirmando resultado firmado con el servidor y actualizando métricas...';
@@ -661,6 +695,15 @@ async function runNextCycle(getWorkWindow) {
     const pausa = tarea.pausa_sugerida_seg || 180;
     const segPausa = Math.round(pausa);
     const targetTime = Date.now() + (segPausa * 1000);
+
+    // Reciclaje periódico del SPA de LinkedIn (cada 10 acciones) durante la pausa humana para liberar fugas de RAM
+    actionsSinceLastRecycle += 1;
+    if (canal === 'LinkedIn' && actionsSinceLastRecycle >= 10 && win && !win.isDestroyed() && !win.isVisible() && segPausa >= 60) {
+      actionsSinceLastRecycle = 0;
+      try {
+        win.loadURL('about:blank').catch(() => {});
+      } catch (_) {}
+    }
 
     runnerDetails.fase = 'pausa_humana';
     runnerDetails.accion_actual = 'Pausa de seguridad humana antiban';

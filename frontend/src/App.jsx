@@ -153,17 +153,33 @@ export default function App() {
     }
   }
 
-  // Consulta periódica de contadores y estado de LinkedIn solo si hay usuario autenticado
+  // Consulta periódica consciente de visibilidad (ahorro de CPU/red cuando la ventana está minimizada u oculta)
   useEffect(() => {
     if (!currentUser) return;
 
-    refreshCounters();
-    checkConnectionAndCampaign();
-    const interval = setInterval(() => {
+    const runSync = () => {
       refreshCounters();
       checkConnectionAndCampaign();
-    }, 6000);
-    return () => clearInterval(interval);
+    };
+
+    runSync();
+    const interval = setInterval(() => {
+      if (!document.hidden) {
+        runSync();
+      }
+    }, 12000);
+
+    const handleVisibility = () => {
+      if (!document.hidden) {
+        runSync();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
   }, [currentUser, selectedWorkspaceTenantId]);
 
   async function checkConnectionAndCampaign() {

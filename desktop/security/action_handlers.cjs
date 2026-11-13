@@ -199,9 +199,10 @@ async function handleLinkedInVisit(win, params) {
     };
   }
 
-  // Scroll biométrico suave
+  // Scroll biométrico suave + pausar reproducción automática de videos para ahorrar GPU/CPU
   await win.webContents.executeJavaScript(`
     (() => {
+      document.querySelectorAll('video').forEach(v => { try { v.pause(); v.autoplay = false; } catch(_) {} });
       window.scrollBy({ top: 300 + Math.random() * 250, behavior: 'smooth' });
       return true;
     })()
